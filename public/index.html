@@ -7,76 +7,73 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <button id="panelBackdrop" class="panel-backdrop" type="button" hidden aria-label="Close controls"></button>
-
-    <aside id="controlPanel" class="control-panel" aria-hidden="true" aria-label="Dashboard controls">
+    <aside id="controlPanel" class="control-panel" aria-label="Dashboard controls">
       <header class="panel-header">
-        <div>
-          <p class="eyebrow">Local Codex Operations</p>
+        <button id="panelToggle" class="menu-button" type="button" aria-expanded="true" aria-controls="controlPanel" aria-label="Collapse controls" data-tooltip="Collapse controls" title="Collapse controls">
+          <span aria-hidden="true"></span>
+        </button>
+        <div class="panel-title">
           <h1>Thread Ops</h1>
-          <p id="source" class="source">Connecting to local Codex state...</p>
+          <p id="connectionState">Live</p>
         </div>
-        <button id="closePanel" type="button" aria-label="Close controls">Close</button>
       </header>
 
-      <section class="panel-section top-actions" aria-label="Dashboard actions">
-        <label class="search">
-          <span>Search</span>
-          <input id="search" type="search" placeholder="thread, prompt, workspace, id" autocomplete="off" />
-        </label>
-        <button id="focusMode" type="button" aria-pressed="false">Focus</button>
-        <button id="refresh" type="button">Refresh</button>
-      </section>
+      <div class="panel-body">
+        <section class="panel-section top-actions" aria-label="Dashboard actions">
+          <label class="search" data-tooltip="Filter visible threads by title, prompt, project, agent, or id" title="Filter visible threads by title, prompt, project, agent, or id">
+            <span>Search</span>
+            <input id="search" type="search" placeholder="thread, project, prompt, id" autocomplete="off" />
+          </label>
+          <button id="focusMode" type="button" aria-pressed="false" data-tooltip="Hide quiet older threads unless they need review" title="Hide quiet older threads unless they need review">Focus</button>
+          <button id="refresh" type="button" data-tooltip="Reload local Codex thread data now" title="Reload local Codex thread data now">Refresh</button>
+        </section>
 
-      <section class="panel-section metric-list" aria-label="Dashboard status">
-        <div class="metric-row live">
-          <span class="pulse" aria-hidden="true"></span>
-          <strong id="connectionState">Live</strong>
-          <small id="updatedAt">--</small>
-        </div>
-        <div class="metric-row"><span>Running</span><strong id="runningThreads">0</strong></div>
-        <div class="metric-row"><span>Complete</span><strong id="completeThreads">0</strong></div>
-        <div class="metric-row"><span>Recent 2h</span><strong id="recentThreads">0</strong></div>
-        <div class="metric-row"><span>Today</span><strong id="todayThreads">0</strong></div>
-        <div class="metric-row"><span>Done</span><strong id="doneThreads">0</strong></div>
-        <div class="metric-row"><span>Unread</span><strong id="unreadThreads">0</strong></div>
-        <div class="metric-row"><span>Risk</span><strong id="riskThreads">0</strong></div>
-      </section>
-
-      <section id="spotlight" class="spotlight" aria-label="At a glance"></section>
-
-      <section class="panel-section toolbar" aria-label="Board filters">
-        <div class="toolbar-left">
-          <div>
-            <p class="eyebrow">Quick Filters</p>
-            <div id="quickFilters" class="segmented"></div>
+        <section class="panel-section metric-list" aria-label="Dashboard status">
+          <div class="metric-row live">
+            <span class="pulse" aria-hidden="true"></span>
+            <span id="updatedAt">--</span>
           </div>
-          <div>
-            <p class="eyebrow">Statuses</p>
-            <div id="statusFilters" class="segmented compact"></div>
+          <div class="metric-row"><span>Running</span><strong id="runningThreads">0</strong></div>
+          <div class="metric-row"><span>Unread</span><strong id="unreadThreads">0</strong></div>
+          <div class="metric-row"><span>Recent</span><strong id="recentThreads">0</strong></div>
+          <div class="metric-row"><span>Risk</span><strong id="riskThreads">0</strong></div>
+          <span id="completeThreads" hidden>0</span>
+          <span id="todayThreads" hidden>0</span>
+          <span id="doneThreads" hidden>0</span>
+        </section>
+
+        <section class="panel-section toolbar" aria-label="Board filters">
+          <div class="toolbar-left">
+            <div>
+              <p class="eyebrow">Quick Filters</p>
+              <div id="quickFilters" class="segmented"></div>
+            </div>
+            <div>
+              <p class="eyebrow">Statuses</p>
+              <div id="statusFilters" class="segmented compact"></div>
+            </div>
           </div>
-        </div>
-        <label class="select-wrap">
-          <span>Sort</span>
-          <select id="sortMode">
-            <option value="priority">Status priority</option>
-            <option value="updated">Recently updated</option>
-            <option value="running">Longest running</option>
-            <option value="risk">Risk first</option>
-          </select>
-        </label>
-        <label class="toggle">
-          <input id="hideDone" type="checkbox" />
-          <span>Hide Done</span>
-        </label>
-      </section>
+          <label class="select-wrap" data-tooltip="Choose how cards are ordered inside columns" title="Choose how cards are ordered inside columns">
+            <span>Sort</span>
+            <select id="sortMode">
+              <option value="priority">Status priority</option>
+              <option value="updated">Recently updated</option>
+              <option value="running">Longest running</option>
+              <option value="risk">Risk first</option>
+            </select>
+          </label>
+          <label class="toggle" data-tooltip="Hide the Done column and older completed threads" title="Hide the Done column and older completed threads">
+            <input id="hideDone" type="checkbox" />
+            <span>Hide Done</span>
+          </label>
+        </section>
+      </div>
     </aside>
 
     <main class="shell">
       <header class="board-topbar">
-        <button id="panelToggle" type="button" aria-expanded="false" aria-controls="controlPanel">Controls</button>
         <div>
-          <strong>Thread Ops</strong>
+          <strong>Board</strong>
           <span id="boardSummary">Loading local Codex threads...</span>
         </div>
         <p id="activeFilters" class="active-filters">All threads</p>

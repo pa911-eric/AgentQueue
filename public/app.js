@@ -13,14 +13,15 @@ const state = {
   activeStatuses: new Set(columns.map((column) => column.id)),
   quickFilter: "all",
   sortMode: "priority",
-  hideDone: false,
+  hideDone: true,
   focusMode: false,
+  panelCollapsed: false,
   selectedThreadId: null,
   lastSnapshotAt: null,
 };
 
+const preferencesKey = "codex-thread-ops-preferences-v1";
 const board = document.querySelector("#board");
-const spotlight = document.querySelector("#spotlight");
 const columnTemplate = document.querySelector("#columnTemplate");
 const cardTemplate = document.querySelector("#cardTemplate");
 const search = document.querySelector("#search");
@@ -31,9 +32,7 @@ const statusFilters = document.querySelector("#statusFilters");
 const quickFilters = document.querySelector("#quickFilters");
 const sortMode = document.querySelector("#sortMode");
 const panelToggle = document.querySelector("#panelToggle");
-const closePanel = document.querySelector("#closePanel");
 const controlPanel = document.querySelector("#controlPanel");
-const panelBackdrop = document.querySelector("#panelBackdrop");
 const boardSummary = document.querySelector("#boardSummary");
 const activeFilters = document.querySelector("#activeFilters");
 const detailDrawer = document.querySelector("#detailDrawer");
@@ -44,15 +43,57 @@ const detailSubtitle = document.querySelector("#detailSubtitle");
 const detailContent = document.querySelector("#detailContent");
 
 const quickFilterDefs = [
-  { id: "all", label: "All" },
-  { id: "review", label: "Needs review" },
-  { id: "risk", label: "Risk" },
-  { id: "logs", label: "Logs" },
-  { id: "tokens", label: "Token heavy" },
-  { id: "unread", label: "Unread" },
-  { id: "projectless", label: "Projectless" },
-  { id: "subagents", label: "Subagents" },
+  { id: "all", label: "All", tip: "Show every matching parent thread" },
+  { id: "review", label: "Needs review", tip: "Show threads with unread, goal, or recent child activity" },
+  { id: "risk", label: "Risk", tip: "Show threads with elevated permission, stale runs, live processes, warnings, or errors" },
+  { id: "logs", label: "Logs", tip: "Show threads with warnings or errors in the last 24 hours" },
+  { id: "tokens", label: "Token heavy", tip: "Show threads with high token usage" },
+  { id: "unread", label: "Unread", tip: "Show unread parent or child threads" },
+  { id: "projectless", label: "Projectless", tip: "Show threads without a project workspace" },
+  { id: "subagents", label: "Subagents", tip: "Show subagent threads and parents with subagents" },
 ];
+
+function readPreferences() {
+  try {
+    return JSON.parse(localStorage.getItem(preferencesKey) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function savePreferences() {
+  localStorage.setItem(preferencesKey, JSON.stringify({
+    query: state.query,
+    activeStatuses: Array.from(state.activeStatuses),
+    quickFilter: state.quickFilter,
+    sortMode: state.sortMode,
+    hideDone: state.hideDone,
+    focusMode: state.focusMode,
+    panelCollapsed: state.panelCollapsed,
+  }));
+}
+
+function restorePreferences() {
+  const prefs = readPreferences();
+  const validStatuses = new Set(columns.map((column) => column.id));
+  const nextStatuses = Array.isArray(prefs.activeStatuses)
+    ? prefs.activeStatuses.filter((id) => validStatuses.has(id))
+    : [];
+
+  if (typeof prefs.query === "string") state.query = prefs.query;
+  if (nextStatuses.length) state.activeStatuses = new Set(nextStatuses);
+  if (quickFilterDefs.some((filter) => filter.id === prefs.quickFilter)) state.quickFilter = prefs.quickFilter;
+  if (["priority", "updated", "running", "risk"].includes(prefs.sortMode)) state.sortMode = prefs.sortMode;
+  if (Object.hasOwn(prefs, "hideDone")) state.hideDone = Boolean(prefs.hideDone);
+  state.focusMode = Boolean(prefs.focusMode);
+  state.panelCollapsed = Boolean(prefs.panelCollapsed);
+
+  search.value = state.query;
+  sortMode.value = state.sortMode;
+  hideDone.checked = state.hideDone;
+  focusMode.setAttribute("aria-pressed", String(state.focusMode));
+  setPanelCollapsed(state.panelCollapsed, false);
+}
 
 function normalize(value) {
   return String(value || "").toLowerCase();
@@ -241,16 +282,20 @@ function makeMeta(label, value) {
 
 function renderStatusFilters() {
   statusFilters.replaceChildren();
-  for (const column of columns) {
+  const visibleStatusColumns = state.hideDone ? columns.filter((column) => column.id !== "done") : columns;
+  for (const column of visibleStatusColumns) {
     const button = document.createElement("button");
     button.type = "button";
     button.dataset.status = column.id;
     button.textContent = column.title;
+    button.title = `Toggle ${column.title} column`;
+    button.dataset.tooltip = button.title;
     button.setAttribute("aria-pressed", String(state.activeStatuses.has(column.id)));
     button.addEventListener("click", () => {
       if (state.activeStatuses.has(column.id)) state.activeStatuses.delete(column.id);
       else state.activeStatuses.add(column.id);
       if (state.activeStatuses.size === 0) state.activeStatuses = new Set(columns.map((item) => item.id));
+      savePreferences();
       render();
     });
     statusFilters.append(button);
@@ -263,9 +308,12 @@ function renderQuickFilters() {
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = filter.label;
+    button.title = filter.tip;
+    button.dataset.tooltip = filter.tip;
     button.setAttribute("aria-pressed", String(state.quickFilter === filter.id));
     button.addEventListener("click", () => {
       state.quickFilter = filter.id;
+      savePreferences();
       render();
     });
     quickFilters.append(button);
@@ -419,33 +467,13 @@ function describeFilters() {
   return filters.length ? filters.join(" / ") : "All threads";
 }
 
-function renderSpotlight(filtered) {
-  spotlight.replaceChildren();
-  const parentThreads = state.threads.filter((thread) => thread.threadSource !== "subagent");
-  const running = state.threads.filter((thread) => thread.status === "running");
-  const justFinished = state.threads.filter((thread) => ["complete", "recent"].includes(thread.status));
-  const needsEyes = parentThreads.filter((thread) => threadNeedsReview(thread) || threadHasRisk(thread));
-  const tokenHeavy = parentThreads.filter(threadIsTokenHeavy);
-
-  const items = [
-    { label: "Running now", value: running.length, detail: running[0] ? getDisplayTitle(running[0]) : "No active turns" },
-    { label: "Finished in 2h", value: justFinished.length, detail: justFinished[0] ? getDisplayTitle(justFinished[0]) : "Nothing fresh yet" },
-    { label: "Needs eyes", value: needsEyes.length, detail: needsEyes[0] ? getDisplayTitle(needsEyes[0]) : "Clear" },
-    { label: "Token heavy", value: tokenHeavy.length, detail: tokenHeavy[0] ? getDisplayTitle(tokenHeavy[0]) : "No heavy threads" },
-  ];
-
-  for (const item of items) {
-    const tile = document.createElement("article");
-    tile.className = "spotlight-tile";
-    tile.innerHTML = `<span>${escapeHtml(item.label)}</span><strong>${escapeHtml(item.value)}</strong><p>${escapeHtml(item.detail)}</p>`;
-    spotlight.append(tile);
-  }
-}
-
 function renderBoard(filtered) {
   board.replaceChildren();
 
-  for (const column of columns) {
+  const visibleColumns = state.hideDone ? columns.filter((column) => column.id !== "done") : columns;
+  board.dataset.columnCount = String(visibleColumns.length);
+
+  for (const column of visibleColumns) {
     const el = columnTemplate.content.firstElementChild.cloneNode(true);
     const threads = filtered.filter((thread) => thread.displayStatus === column.id);
     el.dataset.status = column.id;
@@ -558,12 +586,15 @@ function closeDetails() {
   document.body.classList.remove("detail-open");
 }
 
-function setPanelOpen(open) {
-  document.body.classList.toggle("panel-open", open);
-  controlPanel.setAttribute("aria-hidden", String(!open));
-  panelToggle.setAttribute("aria-expanded", String(open));
-  panelBackdrop.hidden = !open;
-  if (open) search.focus();
+function setPanelCollapsed(collapsed, persist = true) {
+  state.panelCollapsed = collapsed;
+  document.body.classList.toggle("sidebar-collapsed", collapsed);
+  controlPanel.setAttribute("aria-label", collapsed ? "Dashboard controls collapsed" : "Dashboard controls");
+  panelToggle.setAttribute("aria-expanded", String(!collapsed));
+  panelToggle.setAttribute("aria-label", collapsed ? "Expand controls" : "Collapse controls");
+  panelToggle.title = collapsed ? "Expand controls" : "Collapse controls";
+  panelToggle.dataset.tooltip = panelToggle.title;
+  if (persist) savePreferences();
 }
 
 function render() {
@@ -571,7 +602,6 @@ function render() {
   renderQuickFilters();
   const filtered = getBoardThreads();
   renderMetrics();
-  renderSpotlight(filtered);
   renderBoard(filtered);
   if (state.selectedThreadId) showDetails(state.selectedThreadId);
 }
@@ -580,8 +610,7 @@ async function applySnapshot(data) {
   state.threads = data.threads || [];
   state.summary = data.summary || null;
   state.lastSnapshotAt = data.refreshedAt || new Date().toISOString();
-  document.querySelector("#source").textContent = data.error || `${data.indexPath || "No index"} | ${data.sessionsRoot || ""}`;
-  document.querySelector("#connectionState").textContent = "Live";
+  document.querySelector("#connectionState").textContent = data.error ? "Issue" : "Live";
   render();
 }
 
@@ -592,7 +621,7 @@ async function loadThreads() {
     applySnapshot(await response.json());
   } catch (error) {
     document.querySelector("#connectionState").textContent = "Offline";
-    document.querySelector("#source").textContent = error.message;
+    boardSummary.textContent = error.message;
   } finally {
     refresh.disabled = false;
   }
@@ -616,33 +645,34 @@ function connectEvents() {
 
 search.addEventListener("input", () => {
   state.query = search.value;
+  savePreferences();
   render();
 });
 
 refresh.addEventListener("click", loadThreads);
-panelToggle.addEventListener("click", () => setPanelOpen(!document.body.classList.contains("panel-open")));
-closePanel.addEventListener("click", () => setPanelOpen(false));
-panelBackdrop.addEventListener("click", () => setPanelOpen(false));
+panelToggle.addEventListener("click", () => setPanelCollapsed(!state.panelCollapsed));
 closeDetail.addEventListener("click", closeDetails);
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   if (!detailDrawer.hidden) closeDetails();
-  else if (document.body.classList.contains("panel-open")) setPanelOpen(false);
 });
 
 focusMode.addEventListener("click", () => {
   state.focusMode = !state.focusMode;
   focusMode.setAttribute("aria-pressed", String(state.focusMode));
+  savePreferences();
   render();
 });
 
 hideDone.addEventListener("change", () => {
   state.hideDone = hideDone.checked;
+  savePreferences();
   render();
 });
 
 sortMode.addEventListener("change", () => {
   state.sortMode = sortMode.value;
+  savePreferences();
   render();
 });
 
@@ -650,6 +680,7 @@ setInterval(() => {
   if (state.threads.length) renderMetrics();
 }, 1000);
 
+restorePreferences();
 renderStatusFilters();
 renderQuickFilters();
 connectEvents();
