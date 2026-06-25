@@ -883,6 +883,10 @@ time {
   margin-bottom: 14px;
 }
 
+.detail-parent-nav {
+  margin-bottom: 14px;
+}
+
 .detail-section,
 .detail-grid {
   margin-top: 14px;
@@ -941,6 +945,7 @@ time {
   gap: 7px;
 }
 
+.parent-row,
 .child-row {
   display: grid;
   gap: 2px;
@@ -950,11 +955,18 @@ time {
   border-color: var(--outline);
 }
 
+.parent-row {
+  width: 100%;
+  border-color: var(--ink);
+}
+
+.parent-row span,
 .child-row span {
   color: var(--ink);
   font-weight: 700;
 }
 
+.parent-row strong,
 .child-row strong,
 .child-row small {
   min-width: 0;

@@ -364,12 +364,18 @@ function renderCard(thread) {
   const title = card.querySelector("h3");
   const id = card.querySelector(".thread-id");
   const prompt = card.querySelector(".prompt");
+  const unreadIndicator = card.querySelector(".unread-indicator");
   title.textContent = getDisplayTitle(thread);
   title.title = thread.threadSource === "subagent" ? `Parent: ${getDisplayTitle(thread)}\nSubagent task: ${thread.name}` : thread.name;
   id.textContent = getDisplaySubtitle(thread);
   id.title = thread.id;
   prompt.textContent = getPromptText(thread);
   prompt.title = getOriginalTask(thread);
+  if (thread.unread || stats.unread) {
+    unreadIndicator.hidden = false;
+    unreadIndicator.textContent = thread.unread ? "Unread" : `${stats.unread} unread`;
+    unreadIndicator.title = thread.unread ? "Unread thread" : `${stats.unread} unread subagent${stats.unread === 1 ? "" : "s"}`;
+  }
 
   const meta = card.querySelector(".meta-grid");
   meta.append(makeMeta(displayStatus === "running" ? "Running" : "Activity", formatRelative(thread.activityAt)));
@@ -593,6 +599,18 @@ function renderChildList(thread) {
   return `<section class="detail-section"><h3>Subagents</h3><div class="child-list">${rows}</div></section>`;
 }
 
+function renderParentLink(thread, parent) {
+  if (thread.threadSource !== "subagent" || !parent) return "";
+  return `
+    <section class="detail-parent-nav" aria-label="Parent thread">
+      <button class="parent-row" type="button" data-thread-id="${escapeHtml(parent.id)}" title="Back to parent thread details">
+        <span>Back to parent</span>
+        <strong>${escapeHtml(parent.name)}</strong>
+      </button>
+    </section>
+  `;
+}
+
 function renderDetailBadges(thread) {
   const stats = childStats(thread);
   const badges = [];
@@ -621,6 +639,7 @@ function showDetails(threadId) {
     : thread.id;
 
   detailContent.innerHTML = `
+    ${renderParentLink(thread, parent)}
     ${renderDetailBadges(thread)}
     <section class="detail-section">
       <h3>Overview</h3>
@@ -649,6 +668,9 @@ function showDetails(threadId) {
 
   detailContent.querySelectorAll(".child-row").forEach((row) => {
     row.addEventListener("click", () => showDetails(row.dataset.threadId));
+  });
+  detailContent.querySelector(".parent-row")?.addEventListener("click", (event) => {
+    showDetails(event.currentTarget.dataset.threadId);
   });
   detailContent.querySelector("#copyDetailId")?.addEventListener("click", async () => {
     await navigator.clipboard.writeText(thread.id);

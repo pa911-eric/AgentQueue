@@ -4,7 +4,6 @@ A local, dependency-free queue and usage dashboard for Codex desktop power users
 
 AgentQueue reads your local Codex state and gives you a live board of what is running, what just finished, what needs attention, and how quickly current usage limits are burning down.
 
-
 ## Features
 
 - Real-time browser dashboard using Server-Sent Events.
