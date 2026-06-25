@@ -1,10 +1,20 @@
 {
   "name": "agentqueue",
-  "version": "0.2.0",
+  "version": "0.3.4",
   "private": true,
   "description": "Local real-time queue and usage dashboard for Codex agents.",
   "scripts": {
-    "start": "node --no-warnings server.js"
+    "start": "node --no-warnings server.js",
+    "doctor": "node --no-warnings server.js doctor",
+    "update": "node --no-warnings server.js update",
+    "update:check": "node --no-warnings server.js update-check"
+  },
+  "bin": {
+    "agentqueue": "./server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pa911-eric/AgentQueue.git"
   },
   "keywords": [
     "codex",

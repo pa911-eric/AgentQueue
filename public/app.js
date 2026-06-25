@@ -21,12 +21,14 @@ const state = {
   panelCollapsed: false,
   panelWidth: 348,
   usage: null,
+  update: null,
   selectedThreadId: null,
   lastSnapshotAt: null,
 };
 
 const preferencesKey = "agentqueue-preferences-v1";
 const legacyPreferencesKey = "codex-thread-ops-preferences-v1";
+const dismissedUpdateKey = "agentqueue-dismissed-update";
 const panelWidthDefaults = {
   min: 280,
   max: 620,
@@ -34,6 +36,7 @@ const panelWidthDefaults = {
   mobileBreakpoint: 720,
 };
 const board = document.querySelector("#board");
+const timeline = document.querySelector("#timeline");
 const columnTemplate = document.querySelector("#columnTemplate");
 const cardTemplate = document.querySelector("#cardTemplate");
 const search = document.querySelector("#search");
@@ -60,6 +63,12 @@ const detailContent = document.querySelector("#detailContent");
 const cardMenu = document.querySelector("#cardMenu");
 const tagSubmenu = document.querySelector("#tagSubmenu");
 const usageDetail = document.querySelector("#usageDetail");
+const updateNotice = document.querySelector("#updateNotice");
+const updateTitle = document.querySelector("#updateTitle");
+const updateDetail = document.querySelector("#updateDetail");
+const updateReleaseLink = document.querySelector("#updateReleaseLink");
+const copyUpdateCommand = document.querySelector("#copyUpdateCommand");
+const dismissUpdate = document.querySelector("#dismissUpdate");
 let menuThreadId = null;
 
 const quickFilterDefs = [
@@ -194,6 +203,19 @@ function formatClock(value) {
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
 }
 
+function formatTimelineDate(value) {
+  if (!value) return "--";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "--";
+  return date.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function formatIsoTimestamp(value) {
+  const date = new Date(value || 0);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString();
+}
+
 function formatDurationMs(value) {
   if (value == null) return "--";
   const ms = Math.max(0, Number(value));
@@ -287,8 +309,18 @@ function getDisplaySubtitle(thread) {
 }
 
 function getProjectLabel(thread) {
+  return getProjectName(thread);
+}
+
+function getProjectPath(thread) {
   const parent = getParentThread(thread);
-  return compactPath(thread.workspace || thread.outputDirectory || parent?.workspace || parent?.outputDirectory);
+  return thread.workspace || parent?.workspace || "";
+}
+
+function getProjectName(thread) {
+  const pathValue = getProjectPath(thread);
+  const parts = String(pathValue).split(/[\\/]/).filter(Boolean);
+  return parts.at(-1) || "";
 }
 
 function getPromptText(thread) {
@@ -507,12 +539,14 @@ function renderCard(thread) {
   const id = card.querySelector(".thread-id");
   const prompt = card.querySelector(".prompt");
   const unreadIndicator = card.querySelector(".unread-indicator");
+  const runningSpinner = card.querySelector(".running-spinner");
   title.textContent = getDisplayTitle(thread);
   title.title = thread.threadSource === "subagent" ? `Parent: ${getDisplayTitle(thread)}\nSubagent task: ${thread.name}` : thread.name;
   id.textContent = getDisplaySubtitle(thread);
   id.title = thread.id;
   prompt.textContent = getPromptText(thread);
   prompt.title = getOriginalTask(thread);
+  runningSpinner.hidden = displayStatus !== "running";
   if (thread.unread || stats.unread) {
     unreadIndicator.hidden = false;
     unreadIndicator.textContent = thread.unread ? "Unread" : `${stats.unread} unread`;
@@ -550,11 +584,11 @@ function renderCard(thread) {
 
   card.addEventListener("click", (event) => {
     if (event.target.closest("a, button")) return;
-    showDetails(thread.id);
+    openThreadInCodex(thread);
   });
 
   card.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") showDetails(thread.id);
+    if (event.key === "Enter") openThreadInCodex(thread);
     if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
       event.preventDefault();
       const rect = card.getBoundingClientRect();
@@ -568,6 +602,11 @@ function renderCard(thread) {
   });
 
   return card;
+}
+
+function openThreadInCodex(thread) {
+  if (!thread?.codexUrl) return;
+  window.location.href = thread.codexUrl;
 }
 
 function getBoardThreads() {
@@ -636,6 +675,12 @@ function compareRunningUserReply(a, b, direction = "desc") {
 
 function compareByActivity(a, b) {
   return compareNumber(timeValue(a.activityAt), timeValue(b.activityAt), "desc");
+}
+
+function getInteractionAt(thread) {
+  if (thread.lastUserAt) return thread.lastUserAt;
+  if (thread.promptCount || thread.lastPrompt) return thread.activityAt;
+  return null;
 }
 
 function compareByRisk(a, b) {
@@ -715,27 +760,12 @@ function usageShortResetText(window) {
   return `reset ${formatDurationMs(window.resetInMs)}`;
 }
 
-function usageExhaustionText(window) {
-  if (!window) return "empty --";
-  if (window.exhaustionConfidence === "after reset") return "not before reset";
-  if (window.exhaustionConfidence === "flat") return "flat";
-  if (window.exhaustionConfidence === "insufficient") return "need samples";
-  if (window.exhaustionInMs == null) return "empty --";
-  return `empty ${formatDurationMs(window.exhaustionInMs)}`;
-}
-
-function usageBurnText(window) {
-  const burn = Number(window?.slopePercentPerHour);
-  if (!Number.isFinite(burn) || burn <= 0) return "burn --";
-  return `burn ${burn.toFixed(1)}%/h`;
-}
-
 function renderUsageDetailWindow(window) {
   if (!window) return "";
   const usedPercent = Math.max(0, Math.min(100, window.usedPercent));
   const remaining = formatPercent(window.remainingPercent);
   const label = usageShortLabel(window);
-  const title = `${usageLimitLabel(window)}. ${usageBurnText(window)}. ${usageExhaustionText(window)}. ${usageShortResetText(window)}.`;
+  const title = `${usageLimitLabel(window)}. ${remaining} left. ${usageShortResetText(window)}.`;
 
   return `
     <article class="usage-detail-row" title="${escapeHtml(title)}">
@@ -744,7 +774,7 @@ function renderUsageDetailWindow(window) {
         <span>${escapeHtml(remaining)} left</span>
       </div>
       <div class="usage-bar" aria-hidden="true"><span style="width: ${usedPercent}%"></span></div>
-      <p>${escapeHtml(usageBurnText(window))} / ${escapeHtml(usageExhaustionText(window))} / ${escapeHtml(usageShortResetText(window))}</p>
+      <p>${escapeHtml(usageShortResetText(window))}</p>
     </article>
   `;
 }
@@ -759,6 +789,81 @@ function renderUsage() {
   const detailRows = [renderUsageDetailWindow(usage.primary), renderUsageDetailWindow(usage.secondary)].filter(Boolean).join("");
   usageDetail.hidden = !detailRows;
   usageDetail.innerHTML = detailRows;
+}
+
+function renderUpdateNotice() {
+  const update = state.update;
+  if (!update?.updateAvailable || !update.latestTag) {
+    updateNotice.hidden = true;
+    return;
+  }
+
+  const dismissed = localStorage.getItem(dismissedUpdateKey);
+  if (dismissed === update.latestTag) {
+    updateNotice.hidden = true;
+    return;
+  }
+
+  updateTitle.textContent = `${update.latestTag} available`;
+  updateDetail.textContent = `Current ${update.currentVersion || "--"}. Run npm run update from this folder.`;
+  updateReleaseLink.href = update.releaseUrl || `https://github.com/${update.repo || ""}/releases`;
+  updateNotice.hidden = false;
+}
+
+function groupThreadsByRepeatedProject(threads) {
+  const counts = new Map();
+  for (const thread of threads) {
+    const project = getProjectName(thread);
+    if (!project) continue;
+    counts.set(project, (counts.get(project) || 0) + 1);
+  }
+
+  const groupedProjects = new Set();
+  const groups = [];
+  for (const thread of threads) {
+    const project = getProjectName(thread);
+    if (!project || counts.get(project) < 2) {
+      groups.push({ type: "thread", thread });
+      continue;
+    }
+
+    if (groupedProjects.has(project)) continue;
+    groupedProjects.add(project);
+    groups.push({
+      type: "project",
+      project,
+      path: getProjectPath(thread),
+      threads: threads.filter((candidate) => getProjectName(candidate) === project),
+    });
+  }
+
+  return groups;
+}
+
+function renderProjectGroup(group) {
+  const section = document.createElement("section");
+  section.className = "project-group";
+
+  const header = document.createElement("header");
+  const titleWrap = document.createElement("div");
+  const label = document.createElement("span");
+  label.textContent = "Project";
+  const title = document.createElement("h3");
+  title.textContent = group.project;
+  title.title = group.path || group.project;
+  titleWrap.append(label, title);
+
+  const count = document.createElement("span");
+  count.className = "project-count";
+  count.textContent = String(group.threads.length);
+  header.append(titleWrap, count);
+
+  const cards = document.createElement("div");
+  cards.className = "project-cards";
+  cards.append(...group.threads.map(renderCard));
+
+  section.append(header, cards);
+  return section;
 }
 
 function renderBoard(filtered) {
@@ -796,7 +901,10 @@ function renderBoard(filtered) {
       empty.textContent = "No threads";
       cards.append(empty);
     } else {
-      cards.append(...threads.map(renderCard));
+      const grouped = groupThreadsByRepeatedProject(threads);
+      cards.append(...grouped.map((group) => (
+        group.type === "project" ? renderProjectGroup(group) : renderCard(group.thread)
+      )));
     }
 
     board.append(el);
@@ -830,7 +938,7 @@ function renderThreadList(filtered) {
     <span>Status</span>
     <span>Thread</span>
     <span>Activity</span>
-    <span>Risk</span>
+    <span>Reason</span>
   `;
   board.append(header);
 
@@ -869,6 +977,118 @@ function renderThreadList(filtered) {
     `;
     board.append(row);
   }
+}
+
+function timelineReason(thread, stats) {
+  const items = [
+    thread.unread || stats.unread ? "unread" : null,
+    thread.goal?.status === "active" || stats.activeGoals ? "goal" : null,
+    thread.liveProcessCount || stats.liveProcesses ? "terminal" : null,
+    thread.runningStale ? "stale" : null,
+  ].filter(Boolean);
+  return items.join(", ") || compactPath(thread.workspace || thread.outputDirectory) || "-";
+}
+
+function renderTimeline(filtered) {
+  timeline.replaceChildren();
+  const entries = filtered
+    .map((thread) => ({ ...thread, interactionAt: getInteractionAt(thread) }))
+    .filter((thread) => thread.interactionAt)
+    .sort((a, b) => compareNumber(timeValue(a.interactionAt), timeValue(b.interactionAt), "desc") || compareStable(a, b));
+  const visibleEntries = entries.slice(0, 28);
+
+  const header = document.createElement("header");
+  header.className = "timeline-header";
+  header.innerHTML = `
+    <div>
+      <p class="eyebrow">Timeline</p>
+      <h2>Interaction Timeline</h2>
+    </div>
+    <span class="timeline-count">${visibleEntries.length}${entries.length > visibleEntries.length ? ` / ${entries.length}` : ""}</span>
+  `;
+  timeline.append(header);
+
+  if (!visibleEntries.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty";
+    empty.textContent = "No matching interactions";
+    timeline.append(empty);
+    return;
+  }
+
+  const list = document.createElement("div");
+  list.className = "timeline-list";
+
+  for (const thread of visibleEntries) {
+    const stats = childStats(thread);
+    const displayStatus = thread.displayStatus || thread.status;
+    const displayStatusLabel = columns.find((column) => column.id === displayStatus)?.title || thread.statusLabel || displayStatus;
+    const row = document.createElement("article");
+    row.className = "timeline-row";
+    row.dataset.status = displayStatus;
+    row.tabIndex = 0;
+    row.title = getOriginalTask(thread);
+
+    const time = document.createElement("time");
+    time.className = "timeline-time";
+    time.dateTime = thread.interactionAt;
+    time.title = formatIsoTimestamp(thread.interactionAt);
+    time.innerHTML = `
+      <strong>${escapeHtml(formatTimelineDate(thread.interactionAt))}</strong>
+      <span>${escapeHtml(formatClock(thread.interactionAt))}</span>
+    `;
+
+    const main = document.createElement("div");
+    main.className = "timeline-main";
+    main.innerHTML = `
+      <div class="timeline-title-row">
+        <h3>${escapeHtml(getDisplayTitle(thread))}</h3>
+        <span class="badge ${escapeHtml(displayStatus)}">${escapeHtml(displayStatusLabel)}</span>
+      </div>
+      <p>${escapeHtml(getPromptText(thread))}</p>
+      <div class="timeline-meta">
+        <span>${escapeHtml(thread.id)}</span>
+        <span>${escapeHtml(formatRelative(thread.interactionAt))}</span>
+        <span>${escapeHtml(timelineReason(thread, stats))}</span>
+      </div>
+    `;
+
+    const actions = document.createElement("div");
+    actions.className = "timeline-actions";
+    const open = document.createElement("button");
+    open.type = "button";
+    open.textContent = "Open";
+    open.title = "Open in Codex";
+    open.addEventListener("click", () => openThreadInCodex(thread));
+    const details = document.createElement("button");
+    details.type = "button";
+    details.textContent = "Details";
+    details.title = "Open details";
+    details.addEventListener("click", () => showDetails(thread.id));
+    actions.append(open, details);
+
+    row.addEventListener("click", (event) => {
+      if (event.target.closest("button, a")) return;
+      openThreadInCodex(thread);
+    });
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") openThreadInCodex(thread);
+      if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+        event.preventDefault();
+        const rect = row.getBoundingClientRect();
+        showCardMenu(thread.id, rect.left + 24, rect.top + 24);
+      }
+    });
+    row.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      showCardMenu(thread.id, event.clientX, event.clientY);
+    });
+
+    row.append(time, main, actions);
+    list.append(row);
+  }
+
+  timeline.append(list);
 }
 
 function detailRow(label, value) {
@@ -1049,7 +1269,7 @@ async function markRead(thread, includeChildren = false) {
   const ids = new Set(threadIds);
   state.threads = state.threads.map((item) => ids.has(item.id) ? { ...item, unread: false } : item);
   render();
-  await loadThreads();
+  await loadThreads({ force: true });
 }
 
 async function updateThreadTags(threadId, tags) {
@@ -1176,7 +1396,7 @@ async function handleMenuAction(action, actionTarget = null) {
     else tags.add(tag);
     await updateThreadTags(thread.id, Array.from(tags));
   }
-  if (action === "open") window.location.href = thread.codexUrl;
+  if (action === "open") openThreadInCodex(thread);
   if (action === "copy-id") await navigator.clipboard.writeText(thread.id);
   if (action === "copy-link") await navigator.clipboard.writeText(thread.codexUrl);
   if (action === "copy-title") await navigator.clipboard.writeText(getDisplayTitle(thread));
@@ -1295,7 +1515,9 @@ function render() {
   const filtered = getBoardThreads();
   renderMetrics();
   renderUsage();
+  renderUpdateNotice();
   renderBoard(filtered);
+  renderTimeline(filtered);
   if (state.selectedThreadId) showDetails(state.selectedThreadId);
 }
 
@@ -1307,15 +1529,27 @@ async function applySnapshot(data) {
   render();
 }
 
-async function loadThreads() {
+async function loadThreads({ force = false } = {}) {
   refresh.disabled = true;
   try {
-    const response = await fetch("/api/threads");
+    const url = force ? `/api/threads?refresh=${Date.now()}` : "/api/threads";
+    const response = await fetch(url, { cache: "no-store" });
     applySnapshot(await response.json());
   } catch (error) {
     document.querySelector("#updatedAt").textContent = `Issue: ${error.message}`;
   } finally {
     refresh.disabled = false;
+  }
+}
+
+async function checkForUpdates() {
+  try {
+    const response = await fetch("/api/update-check");
+    if (!response.ok) return;
+    state.update = await response.json();
+    renderUpdateNotice();
+  } catch {
+    // Update checks are optional and should never interrupt local monitoring.
   }
 }
 
@@ -1339,6 +1573,17 @@ search.addEventListener("input", () => {
 });
 
 refresh.addEventListener("click", loadThreads);
+copyUpdateCommand.addEventListener("click", async () => {
+  await navigator.clipboard.writeText("npm run update");
+  copyUpdateCommand.textContent = "Copied";
+  setTimeout(() => {
+    copyUpdateCommand.textContent = "Copy Command";
+  }, 1400);
+});
+dismissUpdate.addEventListener("click", () => {
+  if (state.update?.latestTag) localStorage.setItem(dismissedUpdateKey, state.update.latestTag);
+  renderUpdateNotice();
+});
 panelToggle.addEventListener("click", () => setPanelCollapsed(!state.panelCollapsed));
 closeDetail.addEventListener("click", closeDetails);
 cardMenu.addEventListener("click", (event) => {
@@ -1388,3 +1633,4 @@ renderQuickFilters();
 renderViewModes();
 renderSortTiers();
 connectEvents();
+checkForUpdates();

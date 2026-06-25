@@ -12,6 +12,7 @@ AgentQueue reads your local Codex state and gives you a live board of what is ru
 - Status lanes for `Running`, `Complete`, `Recent`, `Today`, and `Done`.
 - `Recent` is a strict 2-hour window.
 - Subagent-aware cards with parent thread titles, compact subagent identity, and child counts.
+- Chronological interaction timeline under the board for reopening recently touched threads.
 - Usage limit panel with primary/secondary reset windows, burn rate, and burndown charts when local `token_count` events are available.
 - Local custom tags with tag chips, tag search, and tag filtering.
 - Right-click card menu for details, opening threads, copying IDs/links/titles, and marking local unread state as read.
@@ -32,6 +33,12 @@ AgentQueue reads your local Codex state and gives you a live board of what is ru
 node --no-warnings server.js
 ```
 
+Or:
+
+```powershell
+npm start
+```
+
 Optional configuration:
 
 ```powershell
@@ -43,10 +50,19 @@ $env:AGENTQUEUE_STALE_MINUTES = "15"
 node --no-warnings server.js
 ```
 
+You can also create a local `.agentqueue.json` file. See `.agentqueue.example.json` for the supported keys. Environment variables override the local config file.
+
 Or on Windows, double-click:
 
 ```text
 start-dashboard.cmd
+```
+
+PowerShell and Unix launchers are also included:
+
+```text
+start-dashboard.ps1
+start-dashboard.sh
 ```
 
 Then open the printed localhost URL. By default the app starts at:
@@ -57,6 +73,24 @@ http://localhost:4173
 
 If the port is already in use, it automatically tries the next available port.
 
+To open the browser automatically:
+
+```powershell
+npm start -- --open
+```
+
+The double-click launchers open the browser automatically by default.
+
+## Local Diagnostics
+
+Run the doctor before filing an issue or after moving the project folder:
+
+```powershell
+npm run doctor
+```
+
+The doctor checks Node.js, SQLite support, `CODEX_HOME`, Codex inventory files, session files, Git install state, and the latest GitHub release when the network is available.
+
 ## Configuration
 
 | Variable | Default | Purpose |
@@ -66,8 +100,31 @@ If the port is already in use, it automatically tries the next available port.
 | `AGENTQUEUE_RECENT_MINUTES` | `120` | `Recent` status window. |
 | `AGENTQUEUE_COMPLETE_MINUTES` | `10` | `Complete` status window. |
 | `AGENTQUEUE_STALE_MINUTES` | `15` | Stale-running warning window. |
+| `AGENTQUEUE_OPEN` | unset | Set to `1` to open the dashboard in your browser on start. |
+| `AGENTQUEUE_UPDATE_CHECK` | `1` | Set to `0` to disable GitHub release checks. |
+| `AGENTQUEUE_UPDATE_CHECK_DISABLED` | unset | Set to `1` to disable GitHub release checks. |
 
 Legacy `CODEX_THREAD_OPS_*` names still work as fallbacks.
+
+## Updates
+
+AgentQueue checks GitHub Releases for a newer version and shows a compact notice in the dashboard when one is available. The check is read-only and can be disabled with `AGENTQUEUE_UPDATE_CHECK=0`.
+
+If you installed AgentQueue with `git clone`, update from the project folder:
+
+```powershell
+npm run update
+```
+
+The updater only fast-forwards a clean checkout from the expected GitHub remote. It refuses to run if local files have changed, so it will not overwrite your work.
+
+To check from the terminal without starting the dashboard:
+
+```powershell
+npm run update:check
+```
+
+Zip installs cannot be updated with `git pull`; download the latest GitHub Release zip instead.
 
 ## Status Model
 

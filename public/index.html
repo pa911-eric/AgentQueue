@@ -45,6 +45,19 @@
           <span id="doneThreads" hidden>0</span>
         </section>
 
+        <section id="updateNotice" class="panel-section update-notice" hidden aria-label="AgentQueue update">
+          <div>
+            <p class="eyebrow">Update</p>
+            <strong id="updateTitle">Update available</strong>
+            <p id="updateDetail"></p>
+          </div>
+          <div class="update-actions">
+            <a id="updateReleaseLink" class="open-link" href="#" target="_blank" rel="noreferrer">Release</a>
+            <button id="copyUpdateCommand" type="button">Copy Command</button>
+            <button id="dismissUpdate" type="button">Dismiss</button>
+          </div>
+        </section>
+
         <section class="panel-section toolbar" aria-label="Board filters">
           <div class="sort-control">
             <label class="select-wrap" title="Choose how cards are ordered inside columns">
@@ -91,6 +104,7 @@
     <main class="shell">
       <nav id="columnSwitcher" class="column-switcher" aria-label="Column switcher"></nav>
       <section id="board" class="board" aria-label="Codex thread board"></section>
+      <section id="timeline" class="timeline" aria-label="Thread interaction timeline"></section>
     </main>
 
     <aside id="detailDrawer" class="detail-drawer" hidden aria-label="Thread details">
@@ -126,7 +140,10 @@
               <h3></h3>
               <p class="thread-id"></p>
             </div>
-            <span class="unread-indicator" hidden></span>
+            <div class="card-indicators">
+              <span class="unread-indicator" hidden></span>
+              <span class="running-spinner" title="Running thread" aria-hidden="true" hidden></span>
+            </div>
           </div>
           <p class="prompt"></p>
         </div>

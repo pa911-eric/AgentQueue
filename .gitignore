@@ -8,6 +8,8 @@ pnpm-debug.log*
 .env
 .env.*
 !.env.example
+.agentqueue.json
+.agentqueue-install.json
 *.local
 coverage/
 dist/

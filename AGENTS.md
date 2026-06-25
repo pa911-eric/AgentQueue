@@ -11,3 +11,12 @@
 - On desktop, keep the board dense with at least 280px columns and 16px gutters. On mobile, keep a single visible column with a column switcher.
 - When adding controls, use compact, familiar dashboard patterns such as segmented controls, checkboxes, selects, and icon-capable buttons.
 - Before finishing UI work, verify that text does not overflow controls or overlap adjacent content across desktop and mobile widths.
+
+## Version Management
+
+- Keep `package.json` as the source of truth for the local AgentQueue version. Bump it intentionally when user-facing behavior, install/update flows, or data contracts change.
+- GitHub update checks compare `package.json` version to the latest GitHub Release tag. Release tags should use `vX.Y.Z` and match the package version without the leading `v`.
+- Do not silently auto-update from the dashboard. The UI may show that an update is available, link to release notes, and copy `npm run update`, but applying updates must stay user-initiated.
+- Keep `npm run update` conservative: it should only fast-forward a clean git checkout from the expected GitHub remote and must refuse to run when local changes are present.
+- Do not commit local install metadata or machine-specific config. `.agentqueue-install.json` and `.agentqueue.json` are intentionally ignored; update `.agentqueue.example.json` when supported config keys change.
+- When changing updater, doctor, or launcher behavior, update `README.md` in the same change and verify `npm run doctor` plus `npm run update:check` when network access is available.

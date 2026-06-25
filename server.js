@@ -1,6 +1,9 @@
+#!/usr/bin/env node
+const fsSync = require("fs");
 const fs = require("fs/promises");
 const path = require("path");
 const http = require("http");
+const { execFileSync, spawn } = require("child_process");
 
 let DatabaseSync = null;
 try {
@@ -11,8 +14,14 @@ try {
 
 const root = __dirname;
 const publicDir = path.join(root, "public");
+const packageJson = readJsonFileSync(path.join(root, "package.json"), {});
+const projectConfig = readJsonFileSync(path.join(root, ".agentqueue.json"), {});
+const installMetadataPath = path.join(root, ".agentqueue-install.json");
 const home = process.env.USERPROFILE || process.env.HOME || "";
-const codexHome = process.env.CODEX_HOME || path.join(home, ".codex");
+const codexHome = process.env.CODEX_HOME || projectConfig.codexHome || path.join(home, ".codex");
+const defaultRepo = packageJson.repository?.url || "https://github.com/pa911-eric/AgentQueue.git";
+const cliArgs = process.argv.slice(2);
+const command = cliArgs[0] && !cliArgs[0].startsWith("-") ? cliArgs[0] : "start";
 
 const candidateIndexPaths = [
   path.join(codexHome, "session_index.jsonl"),
@@ -31,10 +40,164 @@ function minutesFromEnv(name, fallback, legacyName = null) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+function minutesFromConfig(envName, configName, fallback, legacyName = null) {
+  const configuredFallback = Number(projectConfig[configName]);
+  return minutesFromEnv(
+    envName,
+    Number.isFinite(configuredFallback) && configuredFallback > 0 ? configuredFallback : fallback,
+    legacyName
+  );
+}
+
+function readJsonFileSync(filePath, fallback) {
+  try {
+    return JSON.parse(fsSync.readFileSync(filePath, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+
+function boolFromEnv(name, fallback = false) {
+  const value = process.env[name];
+  if (value == null || value === "") return fallback;
+  return /^(1|true|yes|on)$/i.test(value);
+}
+
+function repoSlugFromUrl(value) {
+  const text = String(value || "").trim();
+  const match = text.match(/github\.com[/:]([^/\s]+)\/([^/\s.]+)(?:\.git)?/i);
+  if (!match) return "";
+  return `${match[1]}/${match[2]}`;
+}
+
+function versionParts(value) {
+  return String(value || "")
+    .replace(/^v/i, "")
+    .split(/[.-]/)
+    .map((part) => Number.parseInt(part, 10))
+    .map((part) => (Number.isFinite(part) ? part : 0));
+}
+
+function compareVersions(a, b) {
+  const left = versionParts(a);
+  const right = versionParts(b);
+  const length = Math.max(left.length, right.length, 3);
+  for (let index = 0; index < length; index += 1) {
+    const delta = (left[index] || 0) - (right[index] || 0);
+    if (delta) return delta;
+  }
+  return 0;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function runGit(args, options = {}) {
+  return execFileSync("git", args, {
+    cwd: options.cwd || root,
+    encoding: "utf8",
+    stdio: options.stdio || ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
+function getGitInfo() {
+  try {
+    const inside = runGit(["rev-parse", "--is-inside-work-tree"]);
+    if (inside !== "true") return { available: true, isRepo: false };
+    const remote = runGit(["remote", "get-url", "origin"]);
+    const branch = runGit(["branch", "--show-current"]);
+    const status = runGit(["status", "--porcelain"]);
+    const commit = runGit(["rev-parse", "--short", "HEAD"]);
+    return {
+      available: true,
+      isRepo: true,
+      remote,
+      repo: repoSlugFromUrl(remote),
+      branch,
+      dirty: Boolean(status),
+      status,
+      commit,
+    };
+  } catch (error) {
+    return { available: false, isRepo: false, error: error.message };
+  }
+}
+
+function expectedRepoSlug() {
+  return repoSlugFromUrl(defaultRepo) || repoSlugFromUrl(getGitInfo().remote) || "pa911-eric/AgentQueue";
+}
+
+async function fetchLatestRelease(repo = expectedRepoSlug()) {
+  if (!repo || boolFromEnv("AGENTQUEUE_UPDATE_CHECK_DISABLED") || boolFromEnv("AGENTQUEUE_UPDATE_CHECK", true) === false) {
+    return { available: false, disabled: true };
+  }
+
+  const response = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+    headers: {
+      "accept": "application/vnd.github+json",
+      "user-agent": `AgentQueue/${packageJson.version || "0.0.0"}`,
+    },
+  });
+
+  if (response.status === 404) {
+    return { available: false, repo, reason: "No GitHub release found" };
+  }
+  if (!response.ok) {
+    return { available: false, repo, reason: `GitHub returned ${response.status}` };
+  }
+
+  const release = await response.json();
+  const latestVersion = String(release.tag_name || "").replace(/^v/i, "");
+  return {
+    available: true,
+    repo,
+    currentVersion: packageJson.version || "0.0.0",
+    latestVersion,
+    latestTag: release.tag_name || latestVersion,
+    updateAvailable: compareVersions(latestVersion, packageJson.version || "0.0.0") > 0,
+    releaseUrl: release.html_url,
+    publishedAt: release.published_at,
+    name: release.name || release.tag_name || latestVersion,
+  };
+}
+
+function ensureInstallMetadata() {
+  if (fsSync.existsSync(installMetadataPath)) return;
+  const git = getGitInfo();
+  const metadata = {
+    installedFrom: git.isRepo ? "github-git" : "local",
+    repo: git.repo || expectedRepoSlug(),
+    version: packageJson.version || "0.0.0",
+    updateChannel: "stable",
+    installedAt: new Date().toISOString(),
+    lastUpdateCheck: null,
+  };
+  fsSync.writeFileSync(installMetadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+}
+
+async function updateInstallMetadata(fields) {
+  const current = readJsonFileSync(installMetadataPath, {});
+  await fs.writeFile(installMetadataPath, `${JSON.stringify({ ...current, ...fields }, null, 2)}\n`, "utf8");
+}
+
+function openBrowser(url) {
+  const platform = process.platform;
+  const commandName = platform === "win32" ? "cmd" : platform === "darwin" ? "open" : "xdg-open";
+  const args = platform === "win32" ? ["/c", "start", "", url] : [url];
+  const child = spawn(commandName, args, { detached: true, stdio: "ignore" });
+  child.unref();
+}
+
 const statusWindows = {
-  completeMs: minutesFromEnv("AGENTQUEUE_COMPLETE_MINUTES", 10, "CODEX_THREAD_OPS_COMPLETE_MINUTES") * 60 * 1000,
-  recentMs: minutesFromEnv("AGENTQUEUE_RECENT_MINUTES", 120, "CODEX_THREAD_OPS_RECENT_MINUTES") * 60 * 1000,
-  runningStaleMs: minutesFromEnv("AGENTQUEUE_STALE_MINUTES", 15, "CODEX_THREAD_OPS_STALE_MINUTES") * 60 * 1000,
+  completeMs: minutesFromConfig("AGENTQUEUE_COMPLETE_MINUTES", "completeMinutes", 10, "CODEX_THREAD_OPS_COMPLETE_MINUTES") * 60 * 1000,
+  recentMs: minutesFromConfig("AGENTQUEUE_RECENT_MINUTES", "recentMinutes", 120, "CODEX_THREAD_OPS_RECENT_MINUTES") * 60 * 1000,
+  runningStaleMs: minutesFromConfig("AGENTQUEUE_STALE_MINUTES", "staleMinutes", 15, "CODEX_THREAD_OPS_STALE_MINUTES") * 60 * 1000,
 };
 
 const sessionCache = new Map();
@@ -53,7 +216,7 @@ function sendJson(res, status, payload) {
 }
 
 function sendText(res, status, body, contentType = "text/plain; charset=utf-8") {
-  res.writeHead(status, { "content-type": contentType });
+  res.writeHead(status, { "content-type": contentType, "cache-control": "no-store" });
   res.end(body);
 }
 
@@ -316,16 +479,11 @@ function parseUsageSnapshots(text) {
       const limits = payload.rate_limits;
 
       if (payload.type !== "token_count" || !limits) continue;
-      const totalUsage = payload.info?.total_token_usage || {};
-      const lastUsage = payload.info?.last_token_usage || {};
-
       snapshots.push({
         at: item.timestamp,
         limitId: limits.limit_id || "codex",
         planType: limits.plan_type || null,
         rateLimitReachedType: limits.rate_limit_reached_type || null,
-        totalTokens: Number(totalUsage.total_tokens),
-        lastTokens: Number(lastUsage.total_tokens),
         primary: limits.primary || null,
         secondary: limits.secondary || null,
         credits: limits.credits || null,
@@ -347,16 +505,6 @@ function formatWindowLabel(minutes) {
   return `${minutes}m`;
 }
 
-function median(values) {
-  const sorted = values
-    .filter((value) => Number.isFinite(value) && value > 0)
-    .sort((a, b) => a - b);
-  if (!sorted.length) return null;
-  const middle = Math.floor(sorted.length / 2);
-  if (sorted.length % 2) return sorted[middle];
-  return (sorted[middle - 1] + sorted[middle]) / 2;
-}
-
 function isSameUsageWindow(limit, resetAtMs, windowMinutes) {
   if (!limit) return false;
   const limitResetAtMs = Number(limit.resets_at || 0) * 1000;
@@ -364,78 +512,6 @@ function isSameUsageWindow(limit, resetAtMs, windowMinutes) {
   if (windowMinutes && limitWindowMinutes && limitWindowMinutes !== windowMinutes) return false;
   if (!resetAtMs || !limitResetAtMs) return resetAtMs === limitResetAtMs;
   return Math.abs(limitResetAtMs - resetAtMs) <= 60_000;
-}
-
-function estimateTokenLimit(points) {
-  let tokensSincePercentChange = 0;
-  let previousPercent = null;
-  const tokensPerPercent = [];
-
-  for (const point of points) {
-    if (previousPercent == null) {
-      previousPercent = point.usedPercent;
-      continue;
-    }
-
-    if (Number.isFinite(point.lastTokens) && point.lastTokens > 0) {
-      tokensSincePercentChange += point.lastTokens;
-    }
-
-    const percentDelta = point.usedPercent - previousPercent;
-    if (percentDelta > 0 && tokensSincePercentChange > 0) {
-      tokensPerPercent.push(tokensSincePercentChange / percentDelta);
-      tokensSincePercentChange = 0;
-      previousPercent = point.usedPercent;
-    } else if (percentDelta < 0) {
-      tokensSincePercentChange = 0;
-      previousPercent = point.usedPercent;
-    }
-  }
-
-  const estimate = median(tokensPerPercent);
-  return estimate ? estimate * 100 : null;
-}
-
-function calculateTokenSlope(points, tokenLimit) {
-  const first = points[0] || null;
-  const last = points.at(-1) || null;
-  if (!first || !last || !Number.isFinite(tokenLimit) || tokenLimit <= 0) return null;
-
-  const elapsedHours = (new Date(last.at).getTime() - new Date(first.at).getTime()) / 3_600_000;
-  if (elapsedHours < 1 / 12) return null;
-
-  const tokenDelta = points
-    .slice(1)
-    .reduce((sum, point) => sum + (Number.isFinite(point.lastTokens) && point.lastTokens > 0 ? point.lastTokens : 0), 0);
-
-  if (tokenDelta <= 0) return null;
-  return (tokenDelta / elapsedHours / tokenLimit) * 100;
-}
-
-function calculateTokenRate(points) {
-  const first = points[0] || null;
-  const last = points.at(-1) || null;
-  if (!first || !last) return null;
-
-  const elapsedHours = (new Date(last.at).getTime() - new Date(first.at).getTime()) / 3_600_000;
-  if (elapsedHours <= 0) return null;
-
-  const tokenDelta = points
-    .slice(1)
-    .reduce((sum, point) => sum + (Number.isFinite(point.lastTokens) && point.lastTokens > 0 ? point.lastTokens : 0), 0);
-
-  return tokenDelta > 0 ? tokenDelta / elapsedHours : null;
-}
-
-function calculatePercentSlope(points) {
-  const first = points[0] || null;
-  const last = points.at(-1) || null;
-  if (!first || !last) return null;
-
-  const elapsedHours = (new Date(last.at).getTime() - new Date(first.at).getTime()) / 3_600_000;
-  const usedDelta = last.usedPercent - first.usedPercent;
-  if (elapsedHours < 1 / 12 || usedDelta <= 0) return null;
-  return usedDelta / elapsedHours;
 }
 
 function buildUsageWindow(label, latest, snapshots) {
@@ -453,8 +529,6 @@ function buildUsageWindow(label, latest, snapshots) {
         at: snapshot.at,
         usedPercent: Number(limit.used_percent),
         remainingPercent: Math.max(0, 100 - Number(limit.used_percent)),
-        totalTokens: Number(snapshot.totalTokens),
-        lastTokens: Number(snapshot.lastTokens),
       };
     })
     .filter((point) => point && Number.isFinite(point.usedPercent))
@@ -469,38 +543,6 @@ function buildUsageWindow(label, latest, snapshots) {
     point.remainingPercent = Math.max(0, 100 - runningUsedPercent);
   }
 
-  const recentCutoff = Date.now() - 90 * 60 * 1000;
-  const recentPoints = points.filter((point) => new Date(point.at).getTime() >= recentCutoff);
-  const slopePoints = recentPoints.length >= 2 ? recentPoints : points;
-  const first = slopePoints[0] || null;
-  const last = slopePoints.at(-1) || null;
-  const estimatedTokenLimit = estimateTokenLimit(points);
-  const tokenRatePerHour = calculateTokenRate(slopePoints);
-  let slopePercentPerHour = null;
-  let exhaustedAt = null;
-  let exhaustionConfidence = "insufficient";
-
-  if (first && last) {
-    const usedDelta = last.usedPercent - first.usedPercent;
-    const tokenSlope = calculateTokenSlope(slopePoints, estimatedTokenLimit);
-    const percentSlope = calculatePercentSlope(slopePoints);
-    slopePercentPerHour = tokenSlope || percentSlope;
-
-    if (slopePercentPerHour) {
-      const hoursToExhaustion = (100 - maxUsedPercent) / slopePercentPerHour;
-      const baseAt = new Date(last.at || latest.at).getTime();
-      const exhaustionMs = baseAt + hoursToExhaustion * 3_600_000;
-      exhaustedAt = Number.isFinite(exhaustionMs) ? new Date(exhaustionMs).toISOString() : null;
-      exhaustionConfidence = tokenSlope && slopePoints.length >= 4 ? "medium" : "low";
-
-      if (resetAtMs && exhaustedAt && exhaustionMs > resetAtMs) {
-        exhaustionConfidence = "after reset";
-      }
-    } else if (usedDelta <= 0) {
-      exhaustionConfidence = "flat";
-    }
-  }
-
   return {
     key: label,
     label: label === "primary" ? `Primary ${formatWindowLabel(windowMinutes)}` : `Secondary ${formatWindowLabel(windowMinutes)}`,
@@ -509,12 +551,6 @@ function buildUsageWindow(label, latest, snapshots) {
     windowMinutes,
     resetsAt: resetAtMs ? new Date(resetAtMs).toISOString() : null,
     resetInMs: resetAtMs ? Math.max(0, resetAtMs - Date.now()) : null,
-    slopePercentPerHour,
-    tokenRatePerHour,
-    estimatedTokenLimit,
-    exhaustedAt,
-    exhaustionInMs: exhaustedAt ? Math.max(0, new Date(exhaustedAt).getTime() - Date.now()) : null,
-    exhaustionConfidence,
     points: points.slice(-48),
   };
 }
@@ -819,6 +855,8 @@ function enrichThread(thread, context) {
   const runningStale = unfinished && Date.now() - latestEventMs > statusWindows.runningStaleMs;
   const localSandbox = typeof thread.sandboxPolicy === "object" ? thread.sandboxPolicy?.type : thread.sandboxPolicy;
   const permissionMode = cleanPermission(permissions.activePermissionProfile?.id || permissions.sandboxPolicy?.type || localSandbox || "unknown");
+  const workspace = thread.cwd || workspaceHints[thread.id] || null;
+  const outputDirectory = outputDirs[thread.id] || null;
 
   return {
     id: thread.id,
@@ -848,8 +886,8 @@ function enrichThread(thread, context) {
     permissionMode,
     fullAccess: /danger|full/i.test(permissionMode),
     approvalPolicy: permissions.approvalPolicy || thread.approvalMode || "unknown",
-    workspace: thread.cwd || workspaceHints[thread.id] || null,
-    outputDirectory: outputDirs[thread.id] || null,
+    workspace,
+    outputDirectory,
     lastPrompt: prompts.at(-1) || thread.preview || null,
     promptCount: prompts.length,
     sessionFile: thread.rolloutPath || sessionFilesById.get(thread.id) || null,
@@ -987,6 +1025,112 @@ async function serveStatic(res, requestPath) {
   }
 }
 
+async function runDoctor() {
+  const rows = [];
+  const add = (status, label, detail) => rows.push({ status, label, detail });
+  const nodeMajor = Number(process.versions.node.split(".")[0]);
+  const git = getGitInfo();
+
+  add(nodeMajor >= 18 ? "pass" : "fail", "Node.js", `${process.version}${nodeMajor >= 24 ? " with node:sqlite support" : " without stable node:sqlite support"}`);
+  add(DatabaseSync ? "pass" : "warn", "SQLite inventory", DatabaseSync ? "node:sqlite is available" : "Node 24+ recommended for Codex SQLite inventory reads");
+  add(fsSync.existsSync(codexHome) ? "pass" : "fail", "CODEX_HOME", codexHome);
+  add(candidateIndexPaths.some((filePath) => fsSync.existsSync(filePath)) || fsSync.existsSync(stateDbPath) ? "pass" : "warn", "Thread inventory", "session_index.jsonl or state_5.sqlite");
+  add(fsSync.existsSync(sessionsRoot) ? "pass" : "warn", "Sessions directory", sessionsRoot);
+  add(git.available ? "pass" : "warn", "Git", git.available ? "git command is available" : git.error || "git unavailable");
+  add(git.isRepo ? "pass" : "warn", "Install type", git.isRepo ? `git clone on ${git.branch || "detached"} @ ${git.commit}` : "not a git checkout");
+  if (git.isRepo) {
+    add(git.dirty ? "warn" : "pass", "Local changes", git.dirty ? "working tree has local changes; update will stop" : "working tree clean");
+    add(git.repo === expectedRepoSlug() ? "pass" : "warn", "GitHub remote", git.remote || "missing origin remote");
+  }
+
+  try {
+    const release = await fetchLatestRelease(git.repo || expectedRepoSlug());
+    await updateInstallMetadata({ lastUpdateCheck: new Date().toISOString(), repo: release.repo || git.repo || expectedRepoSlug() });
+    if (release.available) {
+      add(release.updateAvailable ? "warn" : "pass", "Latest release", release.updateAvailable ? `${release.latestTag} available; current ${release.currentVersion}` : `current ${release.currentVersion}`);
+    } else {
+      add("warn", "Latest release", release.reason || "update check disabled");
+    }
+  } catch (error) {
+    add("warn", "Latest release", error.message);
+  }
+
+  console.log("AgentQueue doctor\n");
+  for (const row of rows) {
+    const mark = row.status === "pass" ? "PASS" : row.status === "fail" ? "FAIL" : "WARN";
+    console.log(`[${mark}] ${row.label}: ${row.detail}`);
+  }
+  const failed = rows.some((row) => row.status === "fail");
+  process.exitCode = failed ? 1 : 0;
+}
+
+function runUpdate() {
+  const git = getGitInfo();
+  console.log("AgentQueue update\n");
+  if (!git.available) {
+    console.error(`Git is unavailable: ${git.error || "unknown error"}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (!git.isRepo) {
+    console.error("This install is not a git checkout. Download the latest GitHub release zip instead.");
+    process.exitCode = 1;
+    return;
+  }
+  if (git.repo !== expectedRepoSlug()) {
+    console.error(`Refusing to update from unexpected remote: ${git.remote}`);
+    console.error(`Expected GitHub repo: ${expectedRepoSlug()}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (git.dirty) {
+    console.error("Refusing to update because the working tree has local changes.");
+    console.error("Commit, stash, or move those changes first, then run npm run update again.");
+    process.exitCode = 1;
+    return;
+  }
+
+  console.log(`Remote: ${git.remote}`);
+  console.log(`Current: ${packageJson.version || "0.0.0"} @ ${git.commit}`);
+  execFileSync("git", ["pull", "--ff-only"], { cwd: root, stdio: "inherit" });
+  const nextVersion = readJsonFileSync(path.join(root, "package.json"), {}).version || "0.0.0";
+  fsSync.writeFileSync(installMetadataPath, `${JSON.stringify({
+    ...readJsonFileSync(installMetadataPath, {}),
+    installedFrom: "github-git",
+    repo: git.repo,
+    version: nextVersion,
+    lastUpdatedAt: new Date().toISOString(),
+  }, null, 2)}\n`, "utf8");
+  console.log(`\nAgentQueue is updated to ${nextVersion}. Run npm start to launch.`);
+}
+
+async function runUpdateCheck() {
+  const git = getGitInfo();
+  const release = await fetchLatestRelease(git.repo || expectedRepoSlug());
+  await updateInstallMetadata({ lastUpdateCheck: new Date().toISOString(), repo: release.repo || git.repo || expectedRepoSlug() });
+  if (!release.available) {
+    console.log(release.reason || "No release information available.");
+    return;
+  }
+  console.log(`Current: ${release.currentVersion}`);
+  console.log(`Latest:  ${release.latestTag}`);
+  console.log(release.updateAvailable ? `Update available: ${release.releaseUrl}` : "AgentQueue is current.");
+}
+
+async function renderHealthPage() {
+  const git = getGitInfo();
+  const release = await fetchLatestRelease(git.repo || expectedRepoSlug()).catch((error) => ({ available: false, reason: error.message }));
+  const rows = [
+    ["Version", packageJson.version || "0.0.0"],
+    ["Node", process.version],
+    ["CODEX_HOME", codexHome],
+    ["SQLite", DatabaseSync ? "available" : "unavailable; Node 24+ recommended"],
+    ["Git install", git.isRepo ? `${git.repo} ${git.dirty ? "(local changes)" : "(clean)"}` : "not a git checkout"],
+    ["Latest release", release.available ? `${release.latestTag}${release.updateAvailable ? " available" : " current"}` : release.reason || "unknown"],
+  ];
+  return `<!doctype html><html><head><meta charset="utf-8"><title>AgentQueue Health</title><style>body{font-family:Inter,system-ui,sans-serif;margin:24px;background:#f8fafc;color:#0f172a}main{max-width:820px}table{border-collapse:collapse;width:100%;background:#fff;border:1px solid #e2e8f0}td{padding:10px 12px;border-bottom:1px solid #e2e8f0}td:first-child{font-weight:700;color:#475569;width:180px}code{font-family:Consolas,monospace}</style></head><body><main><h1>AgentQueue Health</h1><table>${rows.map(([label, detail]) => `<tr><td>${label}</td><td><code>${escapeHtml(detail)}</code></td></tr>`).join("")}</table></main></body></html>`;
+}
+
 async function sendEvent(res) {
   const payload = await loadThreads();
   res.write(`event: snapshot\n`);
@@ -1025,12 +1169,33 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/health") {
-      sendJson(res, 200, { ok: true, codexHome, now: new Date().toISOString() });
+      sendJson(res, 200, {
+        ok: true,
+        version: packageJson.version || "0.0.0",
+        codexHome,
+        node: process.version,
+        sqlite: Boolean(DatabaseSync),
+        git: getGitInfo(),
+        now: new Date().toISOString(),
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/update-check") {
+      const git = getGitInfo();
+      const release = await fetchLatestRelease(git.repo || expectedRepoSlug());
+      await updateInstallMetadata({ lastUpdateCheck: new Date().toISOString(), repo: release.repo || git.repo || expectedRepoSlug() });
+      sendJson(res, 200, { ...release, gitInstall: Boolean(git.isRepo), dirty: Boolean(git.dirty) });
       return;
     }
 
     if (url.pathname === "/api/usage") {
       sendJson(res, 200, await readUsageMetrics());
+      return;
+    }
+
+    if (url.pathname === "/health") {
+      sendText(res, 200, await renderHealthPage(), "text/html; charset=utf-8");
       return;
     }
 
@@ -1068,8 +1233,38 @@ function listen(port, attemptsLeft = 12) {
 
   server.listen(port, () => {
     const address = server.address();
-    console.log(`AgentQueue running at http://localhost:${address.port}`);
+    const url = `http://localhost:${address.port}`;
+    console.log(`AgentQueue running at ${url}`);
+    const shouldOpen = cliArgs.includes("--open") || boolFromEnv("AGENTQUEUE_OPEN", Boolean(projectConfig.openBrowser));
+    if (shouldOpen) openBrowser(url);
   });
 }
 
-listen(Number(process.env.PORT || 4173));
+async function main() {
+  ensureInstallMetadata();
+  if (command === "doctor") {
+    await runDoctor();
+    return;
+  }
+  if (command === "update") {
+    runUpdate();
+    return;
+  }
+  if (command === "update-check" || command === "check-updates") {
+    await runUpdateCheck();
+    return;
+  }
+  if (command !== "start") {
+    console.error(`Unknown command: ${command}`);
+    console.error("Use: start, doctor, update, or update-check");
+    process.exitCode = 1;
+    return;
+  }
+
+  listen(Number(process.env.PORT || projectConfig.port || 4173));
+}
+
+main().catch((error) => {
+  console.error(error.stack || error.message);
+  process.exitCode = 1;
+});
