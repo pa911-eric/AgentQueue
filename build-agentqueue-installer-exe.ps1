@@ -43,30 +43,31 @@ InsideCompressed=1
 CAB_FixedSize=0
 CAB_ResvCodeSigning=0
 RebootMode=I
-InstallPrompt=
-DisplayLicense=
-FinishMessage=
+InstallPrompt=%InstallPrompt%
+DisplayLicense=%DisplayLicense%
+FinishMessage=%FinishMessage%
 TargetName=%TargetName%
 FriendlyName=%FriendlyName%
 AppLaunched=%AppLaunched%
-PostInstallCmd=<None>
+PostInstallCmd=%PostInstallCmd%
 AdminQuietInstCmd=
 UserQuietInstCmd=
 SourceFiles=SourceFiles
 
 [Strings]
+InstallPrompt=
+DisplayLicense=
+FinishMessage=
 TargetName=AgentQueueInstaller.exe
 FriendlyName=AgentQueue Installer
 AppLaunched=run-installer.cmd
 PostInstallCmd=<None>
-FILE0=install.ps1
-FILE1=run-installer.cmd
 
 [SourceFiles]
 SourceFiles0=.
 [SourceFiles0]
-%FILE0%=
-%FILE1%=
+install.ps1=
+run-installer.cmd=
 "@
 
 Set-Location $staging
