@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Codex Thread Ops</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Local Codex Operations</p>
+          <h1>Thread Ops</h1>
+          <p id="source" class="source">Connecting to local Codex state...</p>
+        </div>
+        <div class="top-actions" aria-label="Dashboard controls">
+          <label class="search">
+            <span>Search</span>
+            <input id="search" type="search" placeholder="thread, prompt, workspace, id" autocomplete="off" />
+          </label>
+          <button id="focusMode" type="button" aria-pressed="false">Focus</button>
+          <button id="refresh" type="button">Refresh</button>
+        </div>
+      </header>
+
+      <section class="command-strip" aria-label="Live dashboard status">
+        <div class="signal live">
+          <span class="pulse" aria-hidden="true"></span>
+          <strong id="connectionState">Live</strong>
+          <small id="updatedAt">--</small>
+        </div>
+        <div class="signal">
+          <strong id="runningThreads">0</strong>
+          <small>Running</small>
+        </div>
+        <div class="signal">
+          <strong id="completeThreads">0</strong>
+          <small>Complete</small>
+        </div>
+        <div class="signal">
+          <strong id="recentThreads">0</strong>
+          <small>Recent 2h</small>
+        </div>
+        <div class="signal">
+          <strong id="todayThreads">0</strong>
+          <small>Today</small>
+        </div>
+        <div class="signal">
+          <strong id="doneThreads">0</strong>
+          <small>Done</small>
+        </div>
+        <div class="signal">
+          <strong id="unreadThreads">0</strong>
+          <small>Unread</small>
+        </div>
+        <div class="signal">
+          <strong id="riskThreads">0</strong>
+          <small>Risk</small>
+        </div>
+      </section>
+
+      <section id="spotlight" class="spotlight" aria-label="At a glance"></section>
+
+      <section class="toolbar" aria-label="Board filters">
+        <div class="toolbar-left">
+          <div id="quickFilters" class="segmented"></div>
+          <div id="statusFilters" class="segmented compact"></div>
+        </div>
+        <label class="select-wrap">
+          <span>Sort</span>
+          <select id="sortMode">
+            <option value="priority">Status priority</option>
+            <option value="updated">Recently updated</option>
+            <option value="running">Longest running</option>
+            <option value="risk">Risk first</option>
+          </select>
+        </label>
+        <label class="toggle">
+          <input id="hideDone" type="checkbox" />
+          <span>Hide Done</span>
+        </label>
+      </section>
+
+      <section id="board" class="board" aria-label="Codex thread board"></section>
+    </main>
+
+    <template id="columnTemplate">
+      <section class="column">
+        <header>
+          <div>
+            <h2></h2>
+            <p></p>
+          </div>
+          <span class="count">0</span>
+        </header>
+        <div class="cards"></div>
+      </section>
+    </template>
+
+    <template id="cardTemplate">
+      <article class="card">
+        <div class="card-main">
+          <div class="card-title-row">
+            <div>
+              <h3></h3>
+              <p class="thread-id"></p>
+            </div>
+            <span class="status-dot" aria-hidden="true"></span>
+          </div>
+          <p class="prompt"></p>
+        </div>
+        <div class="meta-grid"></div>
+        <div class="badges"></div>
+        <footer>
+          <time></time>
+          <div class="card-actions">
+            <a class="open-link" href="#">Open</a>
+            <button type="button" class="copy">Copy ID</button>
+          </div>
+        </footer>
+      </article>
+    </template>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
