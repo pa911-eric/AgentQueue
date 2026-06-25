@@ -43,9 +43,6 @@ const sortMode = document.querySelector("#sortMode");
 const panelToggle = document.querySelector("#panelToggle");
 const controlPanel = document.querySelector("#controlPanel");
 const panelResizeHandle = document.querySelector("#panelResizeHandle");
-const boardTopbar = document.querySelector("#boardTopbar");
-const boardSummary = document.querySelector("#boardSummary");
-const activeFilters = document.querySelector("#activeFilters");
 const detailDrawer = document.querySelector("#detailDrawer");
 const closeDetail = document.querySelector("#closeDetail");
 const detailKicker = document.querySelector("#detailKicker");
@@ -53,10 +50,6 @@ const detailTitle = document.querySelector("#detailTitle");
 const detailSubtitle = document.querySelector("#detailSubtitle");
 const detailContent = document.querySelector("#detailContent");
 const cardMenu = document.querySelector("#cardMenu");
-const usagePanel = document.querySelector("#usagePanel");
-const usageHeadline = document.querySelector("#usageHeadline");
-const usagePlan = document.querySelector("#usagePlan");
-const usageWindows = document.querySelector("#usageWindows");
 const usageDetail = document.querySelector("#usageDetail");
 let menuThreadId = null;
 
@@ -485,9 +478,6 @@ function renderMetrics() {
   document.querySelector("#unreadThreads").textContent = summary.unread || 0;
   document.querySelector("#riskThreads").textContent = (summary.liveFullAccess || 0) + (summary.staleRunning || 0) + (summary.logErrors24h || 0);
   document.querySelector("#updatedAt").textContent = state.lastSnapshotAt ? `Updated ${formatClock(state.lastSnapshotAt)}` : "--";
-  boardSummary.textContent = "";
-  boardSummary.hidden = true;
-  activeFilters.textContent = "";
 }
 
 function usageLimitLabel(window) {
@@ -495,18 +485,6 @@ function usageLimitLabel(window) {
   if (window.windowMinutes <= 360) return `${Math.round(window.windowMinutes / 60)} hour usage limit`;
   if (window.windowMinutes >= 7 * 24 * 60) return "Weekly usage limit";
   return `${window.label || "Usage"} usage limit`;
-}
-
-function usageResetText(window) {
-  if (!window) return "Reset pending";
-  const resetAt = window.resetsAt || (window.resetInMs == null ? null : new Date(Date.now() + window.resetInMs).toISOString());
-  const date = new Date(resetAt);
-  if (Number.isNaN(date.getTime())) return "Reset pending";
-  const now = new Date();
-  const value = date.toDateString() === now.toDateString()
-    ? date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
-    : date.toLocaleDateString([], { month: "short", day: "numeric" });
-  return `Resets ${value}`;
 }
 
 function usageShortLabel(window) {
@@ -536,27 +514,6 @@ function usageBurnText(window) {
   return `burn ${burn.toFixed(1)}%/h`;
 }
 
-function renderUsageWindow(window) {
-  if (!window) return "";
-  const remaining = formatPercent(window.remainingPercent);
-  const usedPercent = Math.max(0, Math.min(100, window.usedPercent));
-  const label = usageLimitLabel(window);
-  const resetText = usageResetText(window);
-
-  return `
-    <article class="usage-window" title="${escapeHtml(`${label}. ${resetText}. ${remaining} left.`)}">
-      <div class="usage-window-main">
-        <strong>${escapeHtml(label)}</strong>
-        <span>${escapeHtml(resetText)}</span>
-      </div>
-      <div class="usage-window-visual">
-        <div class="usage-bar" aria-hidden="true"><span style="width: ${usedPercent}%"></span></div>
-        <span>${escapeHtml(remaining)} left</span>
-      </div>
-    </article>
-  `;
-}
-
 function renderUsageDetailWindow(window) {
   if (!window) return "";
   const usedPercent = Math.max(0, Math.min(100, window.usedPercent));
@@ -579,18 +536,10 @@ function renderUsageDetailWindow(window) {
 function renderUsage() {
   const usage = state.usage;
   if (!usage?.available) {
-    usagePanel.hidden = true;
-    boardTopbar.hidden = true;
     usageDetail.hidden = true;
     return;
   }
 
-  const primary = usage.primary;
-  boardTopbar.hidden = false;
-  usagePanel.hidden = false;
-  usageHeadline.textContent = "Usage limits";
-  usagePlan.textContent = usage.planType || usage.limitId || "";
-  usageWindows.innerHTML = [renderUsageWindow(usage.primary), renderUsageWindow(usage.secondary)].filter(Boolean).join("");
   const detailRows = [renderUsageDetailWindow(usage.primary), renderUsageDetailWindow(usage.secondary)].filter(Boolean).join("");
   usageDetail.hidden = !detailRows;
   usageDetail.innerHTML = detailRows;
@@ -910,9 +859,7 @@ async function loadThreads() {
     const response = await fetch("/api/threads");
     applySnapshot(await response.json());
   } catch (error) {
-    boardTopbar.hidden = false;
-    boardSummary.hidden = false;
-    boardSummary.textContent = error.message;
+    document.querySelector("#updatedAt").textContent = `Issue: ${error.message}`;
   } finally {
     refresh.disabled = false;
   }
@@ -944,9 +891,7 @@ cardMenu.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-action]");
   if (!button) return;
   handleMenuAction(button.dataset.action).catch((error) => {
-    boardTopbar.hidden = false;
-    boardSummary.hidden = false;
-    boardSummary.textContent = error.message;
+    document.querySelector("#updatedAt").textContent = `Issue: ${error.message}`;
   });
 });
 document.addEventListener("click", (event) => {
