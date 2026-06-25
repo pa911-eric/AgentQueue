@@ -1,7 +1,5 @@
 # AgentQueue
 
-[![Install Now](https://img.shields.io/badge/Install%20Now-Windows%20EXE-0F172A?style=for-the-badge&logo=windows)](https://github.com/pa911-eric/AgentQueue/releases/latest/download/AgentQueue-Setup-0.4.4.exe)
-
 <img width="1920" height="919" alt="image" src="https://github.com/user-attachments/assets/1c773dd8-aaa9-4eb7-86ad-9534dfd1c7a6" />
 
 A local, dependency-free queue and usage dashboard for Codex and Claude Code power users.
@@ -42,15 +40,37 @@ Auto mode reads both Codex and Claude Code when both have local state. Force a s
 - Node.js 24 or newer is recommended for Codex because it can read Codex's local SQLite thread inventory through `node:sqlite`. Claude Code reads JSONL transcripts only and does not require SQLite.
 - Local agent state: Codex desktop state in the Codex home directory, and/or Claude Code state in `~/.claude`.
 
-## Install (Windows desktop app)
+## Install (Agent-guided setup)
 
-Download and run the Windows installer:
+1) Download or clone the repository:
 
-[AgentQueue-Setup-0.4.4.exe](https://github.com/pa911-eric/AgentQueue/releases/latest/download/AgentQueue-Setup-0.4.4.exe)
+**Windows**
+```powershell
+git clone https://github.com/pa911-eric/AgentQueue.git
+cd AgentQueue
+```
 
-The desktop app runs the same local AgentQueue dashboard and API inside an installed Windows app. It starts the local server on `127.0.0.1`, opens the dashboard in an AgentQueue window, and keeps a tray icon available for opening the app, opening diagnostics, copying the local URL, toggling start at login, and quitting.
+2) Install dependencies:
 
-The desktop installer is separate from `build-agentqueue-installer-exe.ps1`, which is the legacy source installer wrapper that downloads the repo and opens the browser-based launcher.
+```powershell
+npm install
+```
+
+3) Start AgentQueue:
+
+```powershell
+npm start
+```
+
+4) Open the printed local URL (default: `http://localhost:4173`).
+
+If you need to run from a specific folder without cloning:
+
+```powershell
+Set-Location <path-to-AgentQueue>
+npm install
+npm start
+```
 
 ## Run
 
