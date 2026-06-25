@@ -4,6 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AgentQueue</title>
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" href="/favicon-32x32.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -42,25 +46,36 @@
         </section>
 
         <section class="panel-section toolbar" aria-label="Board filters">
+          <div class="sort-control">
+            <label class="select-wrap" title="Choose how cards are ordered inside columns">
+              <span>Sort</span>
+              <select id="sortMode">
+                <option value="priority">Tiered priority</option>
+                <option value="updated">Activity first</option>
+                <option value="running">Longest running</option>
+                <option value="risk">Risk first</option>
+              </select>
+            </label>
+            <div id="sortTiers" class="sort-tiers" aria-live="polite"></div>
+          </div>
           <div class="toolbar-left">
+            <div>
+              <p class="eyebrow">View</p>
+              <div id="viewModes" class="segmented compact"></div>
+            </div>
             <div>
               <p class="eyebrow">Quick Filters</p>
               <div id="quickFilters" class="segmented"></div>
+            </div>
+            <div id="tagFilterSection" hidden>
+              <p class="eyebrow">Tags</p>
+              <div id="tagFilters" class="tag-filters"></div>
             </div>
             <div>
               <p class="eyebrow">Statuses</p>
               <div id="statusFilters" class="segmented compact"></div>
             </div>
           </div>
-          <label class="select-wrap" title="Choose how cards are ordered inside columns">
-            <span>Sort</span>
-            <select id="sortMode">
-              <option value="priority">Status priority</option>
-              <option value="updated">Recently updated</option>
-              <option value="running">Longest running</option>
-              <option value="risk">Risk first</option>
-            </select>
-          </label>
           <label class="toggle" title="Hide the Done column and older completed threads">
             <input id="hideDone" type="checkbox" />
             <span>Hide Done</span>
@@ -74,6 +89,7 @@
     </aside>
 
     <main class="shell">
+      <nav id="columnSwitcher" class="column-switcher" aria-label="Column switcher"></nav>
       <section id="board" class="board" aria-label="Codex thread board"></section>
     </main>
 
@@ -125,6 +141,13 @@
 
     <div id="cardMenu" class="context-menu" hidden role="menu" aria-label="Thread actions">
       <button type="button" data-action="details" role="menuitem">Details</button>
+      <div class="menu-submenu" data-menu="tags">
+        <button type="button" class="submenu-trigger" data-action="tags-menu" role="menuitem" aria-haspopup="true" aria-expanded="false">
+          <span>Tags</span>
+          <span aria-hidden="true">></span>
+        </button>
+        <div id="tagSubmenu" class="context-submenu" role="menu" aria-label="Tags"></div>
+      </div>
       <button type="button" data-action="open" role="menuitem">Open in Codex</button>
       <button type="button" data-action="mark-read" role="menuitem">Mark as Read</button>
       <button type="button" data-action="mark-family-read" role="menuitem">Mark Thread + Subagents Read</button>

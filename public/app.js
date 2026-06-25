@@ -12,7 +12,10 @@ const state = {
   query: "",
   activeStatuses: new Set(columns.map((column) => column.id)),
   quickFilter: "all",
+  activeTag: "",
   sortMode: "priority",
+  viewMode: "board",
+  mobileColumn: "running",
   hideDone: true,
   focusMode: false,
   panelCollapsed: false,
@@ -39,7 +42,12 @@ const focusMode = document.querySelector("#focusMode");
 const hideDone = document.querySelector("#hideDone");
 const statusFilters = document.querySelector("#statusFilters");
 const quickFilters = document.querySelector("#quickFilters");
+const tagFilterSection = document.querySelector("#tagFilterSection");
+const tagFilters = document.querySelector("#tagFilters");
+const viewModes = document.querySelector("#viewModes");
 const sortMode = document.querySelector("#sortMode");
+const sortTiers = document.querySelector("#sortTiers");
+const columnSwitcher = document.querySelector("#columnSwitcher");
 const panelToggle = document.querySelector("#panelToggle");
 const controlPanel = document.querySelector("#controlPanel");
 const panelResizeHandle = document.querySelector("#panelResizeHandle");
@@ -50,6 +58,7 @@ const detailTitle = document.querySelector("#detailTitle");
 const detailSubtitle = document.querySelector("#detailSubtitle");
 const detailContent = document.querySelector("#detailContent");
 const cardMenu = document.querySelector("#cardMenu");
+const tagSubmenu = document.querySelector("#tagSubmenu");
 const usageDetail = document.querySelector("#usageDetail");
 let menuThreadId = null;
 
@@ -63,6 +72,30 @@ const quickFilterDefs = [
   { id: "projectless", label: "Projectless", tip: "Show threads without a project workspace" },
   { id: "subagents", label: "Subagents", tip: "Show subagent threads and parents with subagents" },
 ];
+
+const viewModeDefs = [
+  { id: "board", label: "Board", tip: "Show threads grouped by status columns" },
+  { id: "list", label: "List", tip: "Show a condensed monitor list" },
+];
+
+const sortModeDefs = {
+  priority: {
+    label: "Tiered priority",
+    tiers: ["Status lane", "Running user reply", "Needs review", "Risk", "Activity"],
+  },
+  updated: {
+    label: "Activity first",
+    tiers: ["Activity", "Status lane", "Running user reply", "Risk"],
+  },
+  running: {
+    label: "Longest running",
+    tiers: ["Running user reply", "Activity", "Risk", "Title"],
+  },
+  risk: {
+    label: "Risk first",
+    tiers: ["Risk", "Running user reply", "Activity", "Status lane"],
+  },
+};
 
 function readPreferences() {
   try {
@@ -78,7 +111,10 @@ function savePreferences() {
     query: state.query,
     activeStatuses: Array.from(state.activeStatuses),
     quickFilter: state.quickFilter,
+    activeTag: state.activeTag,
     sortMode: state.sortMode,
+    viewMode: state.viewMode,
+    mobileColumn: state.mobileColumn,
     hideDone: state.hideDone,
     focusMode: state.focusMode,
     panelCollapsed: state.panelCollapsed,
@@ -96,7 +132,10 @@ function restorePreferences() {
   if (typeof prefs.query === "string") state.query = prefs.query;
   if (nextStatuses.length) state.activeStatuses = new Set(nextStatuses);
   if (quickFilterDefs.some((filter) => filter.id === prefs.quickFilter)) state.quickFilter = prefs.quickFilter;
-  if (["priority", "updated", "running", "risk"].includes(prefs.sortMode)) state.sortMode = prefs.sortMode;
+  if (typeof prefs.activeTag === "string") state.activeTag = prefs.activeTag;
+  if (Object.hasOwn(sortModeDefs, prefs.sortMode)) state.sortMode = prefs.sortMode;
+  if (viewModeDefs.some((mode) => mode.id === prefs.viewMode)) state.viewMode = prefs.viewMode;
+  if (columns.some((column) => column.id === prefs.mobileColumn)) state.mobileColumn = prefs.mobileColumn;
   if (Object.hasOwn(prefs, "hideDone")) state.hideDone = Boolean(prefs.hideDone);
   if (Number.isFinite(Number(prefs.panelWidth))) state.panelWidth = Number(prefs.panelWidth);
   state.focusMode = Boolean(prefs.focusMode);
@@ -112,6 +151,15 @@ function restorePreferences() {
 
 function normalize(value) {
   return String(value || "").toLowerCase();
+}
+
+function normalizeTag(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-zA-Z0-9_.:-]/g, "")
+    .toLowerCase()
+    .slice(0, 40);
 }
 
 function escapeHtml(value) {
@@ -211,6 +259,16 @@ function childStats(thread) {
   };
 }
 
+function getThreadTags(thread, includeChildren = false) {
+  const tags = new Set(Array.isArray(thread.tags) ? thread.tags : []);
+  if (includeChildren) {
+    for (const child of getChildThreads(thread)) {
+      for (const tag of child.tags || []) tags.add(tag);
+    }
+  }
+  return Array.from(tags).sort((a, b) => a.localeCompare(b));
+}
+
 function getDisplayTitle(thread) {
   if (thread.threadSource !== "subagent") return thread.name;
   return getParentThread(thread)?.name || "Subagent";
@@ -277,6 +335,7 @@ function threadIsTokenHeavy(thread) {
 function threadMatches(thread, query) {
   if (!query) return true;
   const parent = getParentThread(thread);
+  const tags = getThreadTags(thread, true);
   const haystack = [
     thread.name,
     parent?.name,
@@ -291,8 +350,14 @@ function threadMatches(thread, query) {
     thread.outputDirectory,
     thread.status,
     thread.lastToolName,
+    tags.join(" "),
   ].map(normalize).join(" ");
   return haystack.includes(query);
+}
+
+function threadMatchesActiveTag(thread) {
+  if (!state.activeTag) return true;
+  return getThreadTags(thread, true).includes(state.activeTag);
 }
 
 function makeBadge(label, tone = "") {
@@ -351,6 +416,83 @@ function renderQuickFilters() {
   }
 }
 
+function renderViewModes() {
+  viewModes.replaceChildren();
+  for (const mode of viewModeDefs) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = mode.label;
+    button.title = mode.tip;
+    button.setAttribute("aria-pressed", String(state.viewMode === mode.id));
+    button.addEventListener("click", () => {
+      state.viewMode = mode.id;
+      savePreferences();
+      render();
+    });
+    viewModes.append(button);
+  }
+}
+
+function renderSortTiers() {
+  const mode = sortModeDefs[state.sortMode] || sortModeDefs.priority;
+  sortTiers.replaceChildren();
+  sortTiers.title = `${mode.label}: ${mode.tiers.join(" > ")}`;
+
+  for (const [index, tier] of mode.tiers.entries()) {
+    const chip = document.createElement("span");
+    chip.textContent = index === 0 ? tier : `> ${tier}`;
+    sortTiers.append(chip);
+  }
+}
+
+function getTagCounts() {
+  const counts = state.summary?.tagCounts || {};
+  return Object.entries(counts)
+    .filter(([tag, count]) => tag && count > 0)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
+function renderTagFilters() {
+  const tagCounts = getTagCounts();
+  tagFilterSection.hidden = tagCounts.length === 0;
+  tagFilters.replaceChildren();
+  if (!tagCounts.length) {
+    state.activeTag = "";
+    return;
+  }
+
+  if (state.activeTag && !tagCounts.some(([tag]) => tag === state.activeTag)) {
+    state.activeTag = "";
+    savePreferences();
+  }
+
+  const all = document.createElement("button");
+  all.type = "button";
+  all.textContent = "All";
+  all.title = "Clear tag filter";
+  all.setAttribute("aria-pressed", String(!state.activeTag));
+  all.addEventListener("click", () => {
+    state.activeTag = "";
+    savePreferences();
+    render();
+  });
+  tagFilters.append(all);
+
+  for (const [tag, count] of tagCounts) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = `${tag} ${count}`;
+    button.title = `Show threads tagged ${tag}`;
+    button.setAttribute("aria-pressed", String(state.activeTag === tag));
+    button.addEventListener("click", () => {
+      state.activeTag = state.activeTag === tag ? "" : tag;
+      savePreferences();
+      render();
+    });
+    tagFilters.append(button);
+  }
+}
+
 function renderCard(thread) {
   const card = cardTemplate.content.firstElementChild.cloneNode(true);
   const displayStatus = thread.displayStatus || thread.status;
@@ -387,6 +529,7 @@ function renderCard(thread) {
 
   const badges = card.querySelector(".badges");
   if (thread.goal?.status === "active" || stats.activeGoals) badges.append(makeBadge(stats.activeGoals > 1 ? `${stats.activeGoals} active goals` : "goal active", "process"));
+  for (const tag of getThreadTags(thread, false)) badges.append(makeBadge(tag, "tag"));
   const projectLabel = getProjectLabel(thread);
   if (projectLabel) badges.append(makeBadge(projectLabel, "project"));
   if (!badges.children.length) badges.hidden = true;
@@ -438,6 +581,7 @@ function getBoardThreads() {
     if (state.hideDone && thread.displayStatus === "done") return false;
     if (state.focusMode && ["today", "done"].includes(thread.displayStatus) && !threadNeedsReview(thread) && !threadHasRisk(thread)) return false;
     if (!state.activeStatuses.has(thread.displayStatus)) return false;
+    if (!threadMatchesActiveTag(thread)) return false;
     if (state.quickFilter === "review" && !threadNeedsReview(thread)) return false;
     if (state.quickFilter === "risk" && !threadHasRisk(thread)) return false;
     if (state.quickFilter === "logs" && !threadHasLogs(thread)) return false;
@@ -453,24 +597,90 @@ function statusRank(status) {
   return columns.findIndex((column) => column.id === status);
 }
 
+function timeValue(value) {
+  const time = new Date(value || 0).getTime();
+  return Number.isFinite(time) ? time : 0;
+}
+
+function runningAnchor(thread) {
+  return timeValue(thread.lastUserAt || thread.runningSince || thread.activityAt);
+}
+
+function riskScore(thread) {
+  const stats = childStats(thread);
+  return Number(threadHasRisk(thread)) * 5
+    + Number((thread.liveProcessCount || stats.liveProcesses) && thread.fullAccess) * 8
+    + Number(thread.runningStale) * 4
+    + ((thread.logHealth?.errors24h || 0) + stats.errors) * 3
+    + ((thread.logHealth?.warnings24h || 0) + stats.warnings)
+    + Number(thread.fullAccess) * 2
+    + Number(thread.unread || stats.unread) * 2;
+}
+
+function compareNumber(a, b, direction = "desc") {
+  const delta = a - b;
+  return direction === "asc" ? delta : -delta;
+}
+
+function compareText(a, b) {
+  return String(a || "").localeCompare(String(b || ""));
+}
+
+function compareRunningUserReply(a, b, direction = "desc") {
+  const aRunning = (a.displayStatus || a.status) === "running";
+  const bRunning = (b.displayStatus || b.status) === "running";
+  if (aRunning !== bRunning) return Number(bRunning) - Number(aRunning);
+  if (!aRunning && !bRunning) return 0;
+  return compareNumber(runningAnchor(a), runningAnchor(b), direction);
+}
+
+function compareByActivity(a, b) {
+  return compareNumber(timeValue(a.activityAt), timeValue(b.activityAt), "desc");
+}
+
+function compareByRisk(a, b) {
+  return compareNumber(riskScore(a), riskScore(b), "desc");
+}
+
+function compareByStatus(a, b) {
+  return statusRank(a.displayStatus || a.status) - statusRank(b.displayStatus || b.status);
+}
+
+function compareStable(a, b) {
+  return compareText(getDisplayTitle(a), getDisplayTitle(b)) || compareText(a.id, b.id);
+}
+
 function sortThreads(threads) {
   return [...threads].sort((a, b) => {
-    if (state.sortMode === "updated") return new Date(b.activityAt || 0) - new Date(a.activityAt || 0);
-    if (state.sortMode === "running") {
-      const aStart = new Date(a.runningSince || a.activityAt || 0).getTime();
-      const bStart = new Date(b.runningSince || b.activityAt || 0).getTime();
-      return aStart - bStart;
-    }
-    if (state.sortMode === "risk") {
-      const risk = (thread) => Number(threadHasRisk(thread)) * 5 + Number(thread.liveProcessCount && thread.fullAccess) * 8 + (thread.logHealth?.errors24h || 0) * 3 + (thread.logHealth?.warnings24h || 0);
-      const delta = risk(b) - risk(a);
-      if (delta) return delta;
-      return new Date(b.activityAt || 0) - new Date(a.activityAt || 0);
+    if (state.sortMode === "updated") {
+      return compareByActivity(a, b)
+        || compareByStatus(a, b)
+        || compareRunningUserReply(a, b, "desc")
+        || compareByRisk(a, b)
+        || compareStable(a, b);
     }
 
-    const delta = statusRank(a.displayStatus || a.status) - statusRank(b.displayStatus || b.status);
-    if (delta) return delta;
-    return new Date(b.activityAt || 0) - new Date(a.activityAt || 0);
+    if (state.sortMode === "running") {
+      return compareRunningUserReply(a, b, "asc")
+        || compareByActivity(a, b)
+        || compareByRisk(a, b)
+        || compareStable(a, b);
+    }
+
+    if (state.sortMode === "risk") {
+      return compareByRisk(a, b)
+        || compareRunningUserReply(a, b, "desc")
+        || compareByActivity(a, b)
+        || compareByStatus(a, b)
+        || compareStable(a, b);
+    }
+
+    return compareByStatus(a, b)
+      || compareRunningUserReply(a, b, "desc")
+      || Number(threadNeedsReview(b)) - Number(threadNeedsReview(a))
+      || compareByRisk(a, b)
+      || compareByActivity(a, b)
+      || compareStable(a, b);
   });
 }
 
@@ -555,12 +765,26 @@ function renderBoard(filtered) {
   board.replaceChildren();
 
   const visibleColumns = state.hideDone ? columns.filter((column) => column.id !== "done") : columns;
+  if (!visibleColumns.some((column) => column.id === state.mobileColumn)) {
+    state.mobileColumn = visibleColumns[0]?.id || "running";
+  }
+
+  renderColumnSwitcher(filtered, visibleColumns);
+  board.className = state.viewMode === "list" ? "board monitor-list" : "board";
+  board.setAttribute("aria-label", state.viewMode === "list" ? "Codex thread monitor list" : "Codex thread board");
   board.dataset.columnCount = String(visibleColumns.length);
+  board.dataset.view = state.viewMode;
+
+  if (state.viewMode === "list") {
+    renderThreadList(filtered);
+    return;
+  }
 
   for (const column of visibleColumns) {
     const el = columnTemplate.content.firstElementChild.cloneNode(true);
     const threads = filtered.filter((thread) => thread.displayStatus === column.id);
     el.dataset.status = column.id;
+    el.classList.toggle("is-mobile-hidden", column.id !== state.mobileColumn);
     el.querySelector("h2").textContent = column.title;
     el.querySelector("p").textContent = column.description;
     el.querySelector(".count").textContent = `(${threads.length})`;
@@ -576,6 +800,74 @@ function renderBoard(filtered) {
     }
 
     board.append(el);
+  }
+}
+
+function renderColumnSwitcher(filtered, visibleColumns) {
+  columnSwitcher.replaceChildren();
+  columnSwitcher.hidden = state.viewMode !== "board";
+  if (columnSwitcher.hidden) return;
+
+  for (const column of visibleColumns) {
+    const count = filtered.filter((thread) => thread.displayStatus === column.id).length;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = `${column.title} (${count})`;
+    button.setAttribute("aria-pressed", String(state.mobileColumn === column.id));
+    button.addEventListener("click", () => {
+      state.mobileColumn = column.id;
+      savePreferences();
+      render();
+    });
+    columnSwitcher.append(button);
+  }
+}
+
+function renderThreadList(filtered) {
+  const header = document.createElement("div");
+  header.className = "monitor-row monitor-header";
+  header.innerHTML = `
+    <span>Status</span>
+    <span>Thread</span>
+    <span>Activity</span>
+    <span>Risk</span>
+  `;
+  board.append(header);
+
+  if (!filtered.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty";
+    empty.textContent = "No threads";
+    board.append(empty);
+    return;
+  }
+
+  for (const thread of filtered) {
+    const stats = childStats(thread);
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "monitor-row";
+    row.dataset.status = thread.displayStatus;
+    row.addEventListener("click", () => showDetails(thread.id));
+
+    const riskItems = [
+      thread.fullAccess ? "full access" : null,
+      thread.liveProcessCount || stats.liveProcesses ? "terminal" : null,
+      thread.logHealth?.errors24h || stats.errors ? "errors" : null,
+      thread.logHealth?.warnings24h || stats.warnings ? "warnings" : null,
+      thread.runningStale ? "stale" : null,
+    ].filter(Boolean);
+
+    row.innerHTML = `
+      <span class="status-cell"><span class="badge ${escapeHtml(thread.displayStatus)}">${escapeHtml(thread.statusLabel || thread.displayStatus)}</span></span>
+      <span class="thread-cell">
+        <strong>${escapeHtml(getDisplayTitle(thread))}</strong>
+        <small>${escapeHtml(thread.id)}</small>
+      </span>
+      <span>${escapeHtml(formatRelative(thread.activityAt))}</span>
+      <span>${escapeHtml(riskItems.join(", ") || "-")}</span>
+    `;
+    board.append(row);
   }
 }
 
@@ -622,7 +914,31 @@ function renderDetailBadges(thread) {
   if (thread.logHealth?.errors24h || stats.errors) badges.push(makeBadge(`${thread.logHealth.errors24h + stats.errors} errors`, "danger").outerHTML);
   if (thread.logHealth?.warnings24h || stats.warnings) badges.push(makeBadge(`${thread.logHealth.warnings24h + stats.warnings} warnings`, "warning").outerHTML);
   if (thread.goal?.status) badges.push(makeBadge(`goal ${thread.goal.status}`, "process").outerHTML);
+  for (const tag of getThreadTags(thread, false)) badges.push(makeBadge(tag, "tag").outerHTML);
   return `<div class="badges detail-badges">${badges.join("")}</div>`;
+}
+
+function renderTagEditor(thread) {
+  const tags = getThreadTags(thread, false);
+  const chips = tags.length
+    ? tags.map((tag) => `
+      <button class="tag-chip" type="button" data-remove-tag="${escapeHtml(tag)}" title="Remove ${escapeHtml(tag)}">
+        <span>${escapeHtml(tag)}</span>
+        <strong aria-hidden="true">x</strong>
+      </button>
+    `).join("")
+    : `<p class="tag-empty">No tags yet</p>`;
+
+  return `
+    <section class="detail-section tag-editor-section">
+      <h3>Tags</h3>
+      <div class="tag-chip-list">${chips}</div>
+      <form id="tagEditor" class="tag-editor">
+        <input name="tag" type="text" maxlength="40" placeholder="Add tag" autocomplete="off" />
+        <button type="submit">Add</button>
+      </form>
+    </section>
+  `;
 }
 
 function showDetails(threadId) {
@@ -645,6 +961,7 @@ function showDetails(threadId) {
       <h3>Overview</h3>
       <p>${escapeHtml(getOriginalTask(thread))}</p>
     </section>
+    ${renderTagEditor(thread)}
     <section class="detail-grid">
       ${detailRow("Activity", formatRelative(thread.activityAt))}
       ${detailRow("Updated", formatClock(thread.activityAt))}
@@ -675,9 +992,36 @@ function showDetails(threadId) {
   detailContent.querySelector("#copyDetailId")?.addEventListener("click", async () => {
     await navigator.clipboard.writeText(thread.id);
   });
+  detailContent.querySelector("#tagEditor")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const input = event.currentTarget.elements.tag;
+    const tag = normalizeTag(input.value);
+    if (!tag) return;
+    const tags = Array.from(new Set([...getThreadTags(thread, false), tag]));
+    input.value = "";
+    updateThreadTags(thread.id, tags).catch((error) => {
+      document.querySelector("#updatedAt").textContent = `Issue: ${error.message}`;
+    });
+  });
+  detailContent.querySelectorAll("[data-remove-tag]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const removeTag = button.dataset.removeTag;
+      updateThreadTags(thread.id, getThreadTags(thread, false).filter((tag) => tag !== removeTag)).catch((error) => {
+        document.querySelector("#updatedAt").textContent = `Issue: ${error.message}`;
+      });
+    });
+  });
 
   detailDrawer.hidden = false;
   document.body.classList.add("detail-open");
+}
+
+function focusTagEditor() {
+  const input = detailContent.querySelector("#tagEditor input[name='tag']");
+  if (!input) return;
+  input.focus();
+  input.select();
+  input.scrollIntoView({ block: "center", behavior: "smooth" });
 }
 
 function closeDetails() {
@@ -708,9 +1052,66 @@ async function markRead(thread, includeChildren = false) {
   await loadThreads();
 }
 
+async function updateThreadTags(threadId, tags) {
+  const response = await fetch("/api/threads/tags", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ threadId, tags }),
+  });
+
+  if (!response.ok) throw new Error(`Tag update failed: ${response.status}`);
+
+  const result = await response.json();
+  state.threads = state.threads.map((item) => (
+    item.id === threadId ? { ...item, tags: result.tags || [] } : item
+  ));
+  render();
+  await loadThreads();
+}
+
 function setMenuItemHidden(action, hidden) {
   const item = cardMenu.querySelector(`[data-action="${action}"]`);
   if (item) item.hidden = hidden;
+}
+
+function renderTagSubmenu(thread) {
+  const threadTags = new Set(getThreadTags(thread, false));
+  const tagCounts = getTagCounts();
+  tagSubmenu.replaceChildren();
+
+  if (tagCounts.length) {
+    for (const [tag, count] of tagCounts) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.action = "toggle-tag";
+      button.dataset.tag = tag;
+      button.setAttribute("role", "menuitemcheckbox");
+      button.setAttribute("aria-checked", String(threadTags.has(tag)));
+      button.title = threadTags.has(tag) ? `Remove ${tag}` : `Add ${tag}`;
+
+      const label = document.createElement("span");
+      label.textContent = `${threadTags.has(tag) ? "✓ " : ""}${tag}`;
+      const meta = document.createElement("small");
+      meta.textContent = String(count);
+      button.append(label, meta);
+      tagSubmenu.append(button);
+    }
+
+    tagSubmenu.append(document.createElement("hr"));
+  } else {
+    const empty = document.createElement("button");
+    empty.type = "button";
+    empty.disabled = true;
+    empty.textContent = "No tags";
+    tagSubmenu.append(empty, document.createElement("hr"));
+  }
+
+  const newTag = document.createElement("button");
+  newTag.type = "button";
+  newTag.dataset.action = "new-tag";
+  newTag.setAttribute("role", "menuitem");
+  newTag.textContent = "New Tag";
+  tagSubmenu.append(newTag);
 }
 
 function showCardMenu(threadId, x, y) {
@@ -722,6 +1123,10 @@ function showCardMenu(threadId, x, y) {
 
   setMenuItemHidden("mark-read", !thread.unread);
   setMenuItemHidden("mark-family-read", !(stats.total && (thread.unread || stats.unread)));
+  renderTagSubmenu(thread);
+  const tagsMenu = cardMenu.querySelector('[data-menu="tags"]');
+  tagsMenu?.classList.remove("is-open", "align-left");
+  cardMenu.querySelector('[data-action="tags-menu"]')?.setAttribute("aria-expanded", "false");
 
   cardMenu.hidden = false;
   cardMenu.style.left = "0px";
@@ -732,21 +1137,45 @@ function showCardMenu(threadId, x, y) {
   const top = Math.min(y, window.innerHeight - rect.height - 8);
   cardMenu.style.left = `${Math.max(8, left)}px`;
   cardMenu.style.top = `${Math.max(8, top)}px`;
+  if (left + rect.width + 210 > window.innerWidth) tagsMenu?.classList.add("align-left");
   cardMenu.querySelector("button:not([hidden])")?.focus();
 }
 
 function closeCardMenu() {
   cardMenu.hidden = true;
+  cardMenu.querySelector('[data-menu="tags"]')?.classList.remove("is-open");
+  cardMenu.querySelector('[data-action="tags-menu"]')?.setAttribute("aria-expanded", "false");
   menuThreadId = null;
 }
 
-async function handleMenuAction(action) {
+async function handleMenuAction(action, actionTarget = null) {
   const thread = getThreadById(menuThreadId);
   if (!thread) return;
 
+  if (action === "tags-menu") {
+    const submenu = cardMenu.querySelector('[data-menu="tags"]');
+    const trigger = cardMenu.querySelector('[data-action="tags-menu"]');
+    const open = !submenu?.classList.contains("is-open");
+    submenu?.classList.toggle("is-open", open);
+    trigger?.setAttribute("aria-expanded", String(open));
+    return;
+  }
+
+  const tag = normalizeTag(actionTarget?.dataset.tag);
   closeCardMenu();
 
   if (action === "details") showDetails(thread.id);
+  if (action === "new-tag") {
+    showDetails(thread.id);
+    requestAnimationFrame(focusTagEditor);
+  }
+  if (action === "toggle-tag") {
+    if (!tag) return;
+    const tags = new Set(getThreadTags(thread, false));
+    if (tags.has(tag)) tags.delete(tag);
+    else tags.add(tag);
+    await updateThreadTags(thread.id, Array.from(tags));
+  }
   if (action === "open") window.location.href = thread.codexUrl;
   if (action === "copy-id") await navigator.clipboard.writeText(thread.id);
   if (action === "copy-link") await navigator.clipboard.writeText(thread.codexUrl);
@@ -860,6 +1289,9 @@ function setPanelCollapsed(collapsed, persist = true) {
 function render() {
   renderStatusFilters();
   renderQuickFilters();
+  renderViewModes();
+  renderSortTiers();
+  renderTagFilters();
   const filtered = getBoardThreads();
   renderMetrics();
   renderUsage();
@@ -912,7 +1344,7 @@ closeDetail.addEventListener("click", closeDetails);
 cardMenu.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-action]");
   if (!button) return;
-  handleMenuAction(button.dataset.action).catch((error) => {
+  handleMenuAction(button.dataset.action, button).catch((error) => {
     document.querySelector("#updatedAt").textContent = `Issue: ${error.message}`;
   });
 });
@@ -953,4 +1385,6 @@ initPanelResize();
 restorePreferences();
 renderStatusFilters();
 renderQuickFilters();
+renderViewModes();
+renderSortTiers();
 connectEvents();

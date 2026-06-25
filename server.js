@@ -20,6 +20,7 @@ const candidateIndexPaths = [
 ];
 
 const globalStatePath = path.join(codexHome, ".codex-global-state.json");
+const tagsPath = path.join(codexHome, "agentqueue-tags.json");
 const processManagerPath = path.join(codexHome, "process_manager", "chat_processes.json");
 const sessionsRoot = path.join(codexHome, "sessions");
 const stateDbPath = path.join(codexHome, "state_5.sqlite");
@@ -76,6 +77,56 @@ async function readRequestJson(req, maxBytes = 64 * 1024) {
 
   if (!chunks.length) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+function normalizeTag(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-zA-Z0-9_.:-]/g, "")
+    .toLowerCase()
+    .slice(0, 40);
+}
+
+function cleanTags(tags) {
+  return Array.from(new Set(
+    (Array.isArray(tags) ? tags : [])
+      .map(normalizeTag)
+      .filter(Boolean)
+  )).slice(0, 12);
+}
+
+async function readThreadTags() {
+  const raw = await readJsonFile(tagsPath, {});
+  const source = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  const tagsByThread = {};
+
+  for (const [threadId, tags] of Object.entries(source)) {
+    if (!/^[0-9a-f-]{36}$/i.test(threadId)) continue;
+    const clean = cleanTags(tags);
+    if (clean.length) tagsByThread[threadId] = clean;
+  }
+
+  return tagsByThread;
+}
+
+async function writeThreadTags(tagsByThread) {
+  const tempPath = `${tagsPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tempPath, `${JSON.stringify(tagsByThread, null, 2)}\n`, "utf8");
+  await fs.rename(tempPath, tagsPath);
+}
+
+async function setThreadTags(threadId, tags) {
+  if (typeof threadId !== "string" || !/^[0-9a-f-]{36}$/i.test(threadId)) {
+    throw new Error("Invalid thread id");
+  }
+
+  const tagsByThread = await readThreadTags();
+  const clean = cleanTags(tags);
+  if (clean.length) tagsByThread[threadId] = clean;
+  else delete tagsByThread[threadId];
+  await writeThreadTags(tagsByThread);
+  return { threadId, tags: clean };
 }
 
 async function firstExistingPath(paths) {
@@ -265,12 +316,16 @@ function parseUsageSnapshots(text) {
       const limits = payload.rate_limits;
 
       if (payload.type !== "token_count" || !limits) continue;
+      const totalUsage = payload.info?.total_token_usage || {};
+      const lastUsage = payload.info?.last_token_usage || {};
 
       snapshots.push({
         at: item.timestamp,
         limitId: limits.limit_id || "codex",
         planType: limits.plan_type || null,
         rateLimitReachedType: limits.rate_limit_reached_type || null,
+        totalTokens: Number(totalUsage.total_tokens),
+        lastTokens: Number(lastUsage.total_tokens),
         primary: limits.primary || null,
         secondary: limits.secondary || null,
         credits: limits.credits || null,
@@ -292,6 +347,97 @@ function formatWindowLabel(minutes) {
   return `${minutes}m`;
 }
 
+function median(values) {
+  const sorted = values
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length % 2) return sorted[middle];
+  return (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function isSameUsageWindow(limit, resetAtMs, windowMinutes) {
+  if (!limit) return false;
+  const limitResetAtMs = Number(limit.resets_at || 0) * 1000;
+  const limitWindowMinutes = Number(limit.window_minutes || 0);
+  if (windowMinutes && limitWindowMinutes && limitWindowMinutes !== windowMinutes) return false;
+  if (!resetAtMs || !limitResetAtMs) return resetAtMs === limitResetAtMs;
+  return Math.abs(limitResetAtMs - resetAtMs) <= 60_000;
+}
+
+function estimateTokenLimit(points) {
+  let tokensSincePercentChange = 0;
+  let previousPercent = null;
+  const tokensPerPercent = [];
+
+  for (const point of points) {
+    if (previousPercent == null) {
+      previousPercent = point.usedPercent;
+      continue;
+    }
+
+    if (Number.isFinite(point.lastTokens) && point.lastTokens > 0) {
+      tokensSincePercentChange += point.lastTokens;
+    }
+
+    const percentDelta = point.usedPercent - previousPercent;
+    if (percentDelta > 0 && tokensSincePercentChange > 0) {
+      tokensPerPercent.push(tokensSincePercentChange / percentDelta);
+      tokensSincePercentChange = 0;
+      previousPercent = point.usedPercent;
+    } else if (percentDelta < 0) {
+      tokensSincePercentChange = 0;
+      previousPercent = point.usedPercent;
+    }
+  }
+
+  const estimate = median(tokensPerPercent);
+  return estimate ? estimate * 100 : null;
+}
+
+function calculateTokenSlope(points, tokenLimit) {
+  const first = points[0] || null;
+  const last = points.at(-1) || null;
+  if (!first || !last || !Number.isFinite(tokenLimit) || tokenLimit <= 0) return null;
+
+  const elapsedHours = (new Date(last.at).getTime() - new Date(first.at).getTime()) / 3_600_000;
+  if (elapsedHours < 1 / 12) return null;
+
+  const tokenDelta = points
+    .slice(1)
+    .reduce((sum, point) => sum + (Number.isFinite(point.lastTokens) && point.lastTokens > 0 ? point.lastTokens : 0), 0);
+
+  if (tokenDelta <= 0) return null;
+  return (tokenDelta / elapsedHours / tokenLimit) * 100;
+}
+
+function calculateTokenRate(points) {
+  const first = points[0] || null;
+  const last = points.at(-1) || null;
+  if (!first || !last) return null;
+
+  const elapsedHours = (new Date(last.at).getTime() - new Date(first.at).getTime()) / 3_600_000;
+  if (elapsedHours <= 0) return null;
+
+  const tokenDelta = points
+    .slice(1)
+    .reduce((sum, point) => sum + (Number.isFinite(point.lastTokens) && point.lastTokens > 0 ? point.lastTokens : 0), 0);
+
+  return tokenDelta > 0 ? tokenDelta / elapsedHours : null;
+}
+
+function calculatePercentSlope(points) {
+  const first = points[0] || null;
+  const last = points.at(-1) || null;
+  if (!first || !last) return null;
+
+  const elapsedHours = (new Date(last.at).getTime() - new Date(first.at).getTime()) / 3_600_000;
+  const usedDelta = last.usedPercent - first.usedPercent;
+  if (elapsedHours < 1 / 12 || usedDelta <= 0) return null;
+  return usedDelta / elapsedHours;
+}
+
 function buildUsageWindow(label, latest, snapshots) {
   const current = latest?.[label];
   if (!current || typeof current.used_percent !== "number") return null;
@@ -302,35 +448,50 @@ function buildUsageWindow(label, latest, snapshots) {
   const points = snapshots
     .map((snapshot) => {
       const limit = snapshot[label];
-      if (!limit || Number(limit.resets_at || 0) * 1000 !== resetAtMs) return null;
+      if (!isSameUsageWindow(limit, resetAtMs, windowMinutes)) return null;
       return {
         at: snapshot.at,
         usedPercent: Number(limit.used_percent),
         remainingPercent: Math.max(0, 100 - Number(limit.used_percent)),
+        totalTokens: Number(snapshot.totalTokens),
+        lastTokens: Number(snapshot.lastTokens),
       };
     })
     .filter((point) => point && Number.isFinite(point.usedPercent))
     .sort((a, b) => new Date(a.at) - new Date(b.at));
+
+  let maxUsedPercent = usedPercent;
+  let runningUsedPercent = null;
+  for (const point of points) {
+    runningUsedPercent = Math.max(runningUsedPercent ?? point.usedPercent, point.usedPercent);
+    maxUsedPercent = Math.max(maxUsedPercent, runningUsedPercent);
+    point.usedPercent = runningUsedPercent;
+    point.remainingPercent = Math.max(0, 100 - runningUsedPercent);
+  }
 
   const recentCutoff = Date.now() - 90 * 60 * 1000;
   const recentPoints = points.filter((point) => new Date(point.at).getTime() >= recentCutoff);
   const slopePoints = recentPoints.length >= 2 ? recentPoints : points;
   const first = slopePoints[0] || null;
   const last = slopePoints.at(-1) || null;
+  const estimatedTokenLimit = estimateTokenLimit(points);
+  const tokenRatePerHour = calculateTokenRate(slopePoints);
   let slopePercentPerHour = null;
   let exhaustedAt = null;
   let exhaustionConfidence = "insufficient";
 
   if (first && last) {
-    const elapsedHours = (new Date(last.at).getTime() - new Date(first.at).getTime()) / 3_600_000;
     const usedDelta = last.usedPercent - first.usedPercent;
+    const tokenSlope = calculateTokenSlope(slopePoints, estimatedTokenLimit);
+    const percentSlope = calculatePercentSlope(slopePoints);
+    slopePercentPerHour = tokenSlope || percentSlope;
 
-    if (elapsedHours >= 1 / 12 && usedDelta > 0) {
-      slopePercentPerHour = usedDelta / elapsedHours;
-      const hoursToExhaustion = (100 - usedPercent) / slopePercentPerHour;
-      const exhaustionMs = new Date(latest.at).getTime() + hoursToExhaustion * 3_600_000;
+    if (slopePercentPerHour) {
+      const hoursToExhaustion = (100 - maxUsedPercent) / slopePercentPerHour;
+      const baseAt = new Date(last.at || latest.at).getTime();
+      const exhaustionMs = baseAt + hoursToExhaustion * 3_600_000;
       exhaustedAt = Number.isFinite(exhaustionMs) ? new Date(exhaustionMs).toISOString() : null;
-      exhaustionConfidence = slopePoints.length >= 4 ? "medium" : "low";
+      exhaustionConfidence = tokenSlope && slopePoints.length >= 4 ? "medium" : "low";
 
       if (resetAtMs && exhaustedAt && exhaustionMs > resetAtMs) {
         exhaustionConfidence = "after reset";
@@ -343,12 +504,14 @@ function buildUsageWindow(label, latest, snapshots) {
   return {
     key: label,
     label: label === "primary" ? `Primary ${formatWindowLabel(windowMinutes)}` : `Secondary ${formatWindowLabel(windowMinutes)}`,
-    usedPercent,
-    remainingPercent: Math.max(0, 100 - usedPercent),
+    usedPercent: maxUsedPercent,
+    remainingPercent: Math.max(0, 100 - maxUsedPercent),
     windowMinutes,
     resetsAt: resetAtMs ? new Date(resetAtMs).toISOString() : null,
     resetInMs: resetAtMs ? Math.max(0, resetAtMs - Date.now()) : null,
     slopePercentPerHour,
+    tokenRatePerHour,
+    estimatedTokenLimit,
     exhaustedAt,
     exhaustionInMs: exhaustedAt ? Math.max(0, new Date(exhaustedAt).getTime() - Date.now()) : null,
     exhaustionConfidence,
@@ -629,7 +792,7 @@ function toLocalDateKey(value) {
 }
 
 function enrichThread(thread, context) {
-  const { state, sessionFilesById, processRowsByThread, spawnEdges, goals, logHealth } = context;
+  const { state, sessionFilesById, processRowsByThread, spawnEdges, goals, logHealth, tagsByThread } = context;
   const atomState = state["electron-persisted-atom-state"] || {};
   const permissionsById = state["heartbeat-thread-permissions-by-id"] || atomState["heartbeat-thread-permissions-by-id"] || {};
   const unreadByHost = state["unread-thread-ids-by-host-v1"] || atomState["unread-thread-ids-by-host-v1"] || {};
@@ -668,6 +831,7 @@ function enrichThread(thread, context) {
     activityAt,
     activityDateKey: toLocalDateKey(activityAt),
     completedAt: session?.taskCompleteAt || session?.finalAnswerAt || null,
+    lastUserAt: session?.lastUserAt || null,
     runningSince: status === "running" ? (session?.lastUserAt || session?.lastMeaningfulAt || activityAt) : null,
     runningStale,
     aborted: Boolean(session?.turnAbortedAt),
@@ -704,6 +868,7 @@ function enrichThread(thread, context) {
     gitOriginUrl: thread.gitOriginUrl || null,
     model: thread.model || null,
     reasoningEffort: thread.reasoningEffort || null,
+    tags: tagsByThread[thread.id] || [],
     codexUrl: `codex://threads/${thread.id}`,
     parseError: thread.parse_error || null,
   };
@@ -712,11 +877,18 @@ function enrichThread(thread, context) {
 function computeSummary(threads, refreshedAt) {
   const counts = Object.fromEntries(["running", "complete", "recent", "today", "done"].map((key) => [key, 0]));
   for (const thread of threads) counts[thread.status] = (counts[thread.status] || 0) + 1;
+  const tagCounts = {};
+  for (const thread of threads) {
+    for (const tag of thread.tags || []) {
+      tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+    }
+  }
 
   return {
     refreshedAt,
     total: threads.length,
     counts,
+    tagCounts,
     unread: threads.filter((thread) => thread.unread).length,
     liveProcesses: threads.reduce((sum, thread) => sum + thread.liveProcessCount, 0),
     liveFullAccess: threads.filter((thread) => thread.liveProcessCount && thread.fullAccess).length,
@@ -744,11 +916,12 @@ async function loadThreads() {
     };
   }
 
-  const [indexText, state, sessionFilesById, processRowsByThread] = await Promise.all([
+  const [indexText, state, sessionFilesById, processRowsByThread, tagsByThread] = await Promise.all([
     indexPath ? fs.readFile(indexPath, "utf8") : Promise.resolve(""),
     readJsonFile(globalStatePath, {}),
     getSessionFilesById(),
     readProcessRows(),
+    readThreadTags(),
   ]);
 
   const threadsSource = sqliteThreads.length ? sqliteThreads : readThreadsFromIndex(indexText);
@@ -763,7 +936,7 @@ async function loadThreads() {
     sessionSummaries.set(id, await readSessionSummary(thread.rolloutPath || sessionFilesById.get(id)));
   }));
 
-  const context = { state, sessionFilesById, processRowsByThread, sessionSummaries, spawnEdges, goals, logHealth };
+  const context = { state, sessionFilesById, processRowsByThread, sessionSummaries, spawnEdges, goals, logHealth, tagsByThread };
   const threads = Array.from(unique.values())
     .map((thread) => enrichThread(thread, context))
     .sort((a, b) => {
@@ -837,6 +1010,17 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readRequestJson(req);
       sendJson(res, 200, { ok: true, ...(await markThreadsRead(body.threadIds)) });
+      return;
+    }
+
+    if (url.pathname === "/api/threads/tags") {
+      if (req.method !== "POST") {
+        sendJson(res, 405, { error: "Method not allowed" });
+        return;
+      }
+
+      const body = await readRequestJson(req);
+      sendJson(res, 200, { ok: true, ...(await setThreadTags(body.threadId, body.tags)) });
       return;
     }
 

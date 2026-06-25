@@ -13,10 +13,11 @@ AgentQueue reads your local Codex state and gives you a live board of what is ru
 - `Recent` is a strict 2-hour window.
 - Subagent-aware cards with parent thread titles, compact subagent identity, and child counts.
 - Usage limit panel with primary/secondary reset windows, burn rate, and burndown charts when local `token_count` events are available.
+- Local custom tags with tag chips, tag search, and tag filtering.
 - Right-click card menu for details, opening threads, copying IDs/links/titles, and marking local unread state as read.
 - Quick filters for review, risk, unread, projectless, and subagent work.
 - <img width="584" height="349" alt="image" src="https://github.com/user-attachments/assets/371353a4-0c4b-4d80-8706-19303f4304a2" />
-- Sort modes for status priority, newest activity, longest running, and risk first.
+- Tiered sort modes for priority, activity, longest running, and risk first.
 - Local-only data access. No telemetry, account service, or npm install required.
 
 ## Requirements
@@ -86,10 +87,13 @@ The dashboard reads local files only:
 - `%CODEX_HOME%\goals_1.sqlite`
 - `%CODEX_HOME%\session_index.jsonl`
 - `%CODEX_HOME%\.codex-global-state.json`
+- `%CODEX_HOME%\agentqueue-tags.json`
 - `%CODEX_HOME%\process_manager\chat_processes.json`
 - `%CODEX_HOME%\sessions\**\*.jsonl`
 
 Usage metrics come from local `token_count` events in session JSONL files. If those events are not available, the usage panel stays hidden.
+
+Custom tags are stored in AgentQueue's own `%CODEX_HOME%\agentqueue-tags.json` sidecar file. AgentQueue does not write tags into Codex session JSONL files, the session index, or Codex SQLite databases.
 
 If `CODEX_HOME` is not set, the app uses your platform home directory's `.codex` folder.
 
@@ -98,6 +102,10 @@ If `CODEX_HOME` is not set, the app uses your platform home directory's `.codex`
 This project does not send your Codex state anywhere. It serves a local dashboard from your machine and reads local Codex files at request time.
 
 Be thoughtful before screenshots or screen shares: thread titles, prompts, workspace paths, and metadata may contain sensitive project context.
+
+## Contributing
+
+For feature requests, please open a GitHub Issue instead of submitting a pull request. Issues make it easier to discuss the use case, shape the design, and decide whether the request fits AgentQueue before implementation work starts.
 
 ## License
 
