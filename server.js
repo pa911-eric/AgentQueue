@@ -37,6 +37,10 @@ const statusWindows = {
 };
 
 const sessionCache = new Map();
+const usageCache = {
+  expiresAt: 0,
+  payload: null,
+};
 
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload, null, 2);
@@ -247,6 +251,147 @@ async function readSessionSummary(filePath) {
   } catch {
     return null;
   }
+}
+
+function parseUsageSnapshots(text) {
+  const snapshots = [];
+
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+
+    try {
+      const item = JSON.parse(line);
+      const payload = item.payload || {};
+      const limits = payload.rate_limits;
+
+      if (payload.type !== "token_count" || !limits) continue;
+
+      snapshots.push({
+        at: item.timestamp,
+        limitId: limits.limit_id || "codex",
+        planType: limits.plan_type || null,
+        rateLimitReachedType: limits.rate_limit_reached_type || null,
+        primary: limits.primary || null,
+        secondary: limits.secondary || null,
+        credits: limits.credits || null,
+        individualLimit: limits.individual_limit || null,
+      });
+    } catch {
+      // Session logs are append-only; skip incomplete or malformed lines.
+    }
+  }
+
+  return snapshots;
+}
+
+function formatWindowLabel(minutes) {
+  if (!minutes) return "Usage";
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes % 1440 === 0) return `${minutes / 1440}d`;
+  if (minutes % 60 === 0) return `${minutes / 60}h`;
+  return `${minutes}m`;
+}
+
+function buildUsageWindow(label, latest, snapshots) {
+  const current = latest?.[label];
+  if (!current || typeof current.used_percent !== "number") return null;
+
+  const resetAtMs = Number(current.resets_at || 0) * 1000;
+  const windowMinutes = Number(current.window_minutes || 0);
+  const usedPercent = Number(current.used_percent);
+  const points = snapshots
+    .map((snapshot) => {
+      const limit = snapshot[label];
+      if (!limit || Number(limit.resets_at || 0) * 1000 !== resetAtMs) return null;
+      return {
+        at: snapshot.at,
+        usedPercent: Number(limit.used_percent),
+        remainingPercent: Math.max(0, 100 - Number(limit.used_percent)),
+      };
+    })
+    .filter((point) => point && Number.isFinite(point.usedPercent))
+    .sort((a, b) => new Date(a.at) - new Date(b.at));
+
+  const recentCutoff = Date.now() - 90 * 60 * 1000;
+  const recentPoints = points.filter((point) => new Date(point.at).getTime() >= recentCutoff);
+  const slopePoints = recentPoints.length >= 2 ? recentPoints : points;
+  const first = slopePoints[0] || null;
+  const last = slopePoints.at(-1) || null;
+  let slopePercentPerHour = null;
+  let exhaustedAt = null;
+  let exhaustionConfidence = "insufficient";
+
+  if (first && last) {
+    const elapsedHours = (new Date(last.at).getTime() - new Date(first.at).getTime()) / 3_600_000;
+    const usedDelta = last.usedPercent - first.usedPercent;
+
+    if (elapsedHours >= 1 / 12 && usedDelta > 0) {
+      slopePercentPerHour = usedDelta / elapsedHours;
+      const hoursToExhaustion = (100 - usedPercent) / slopePercentPerHour;
+      const exhaustionMs = new Date(latest.at).getTime() + hoursToExhaustion * 3_600_000;
+      exhaustedAt = Number.isFinite(exhaustionMs) ? new Date(exhaustionMs).toISOString() : null;
+      exhaustionConfidence = slopePoints.length >= 4 ? "medium" : "low";
+
+      if (resetAtMs && exhaustedAt && exhaustionMs > resetAtMs) {
+        exhaustionConfidence = "after reset";
+      }
+    } else if (usedDelta <= 0) {
+      exhaustionConfidence = "flat";
+    }
+  }
+
+  return {
+    key: label,
+    label: label === "primary" ? `Primary ${formatWindowLabel(windowMinutes)}` : `Secondary ${formatWindowLabel(windowMinutes)}`,
+    usedPercent,
+    remainingPercent: Math.max(0, 100 - usedPercent),
+    windowMinutes,
+    resetsAt: resetAtMs ? new Date(resetAtMs).toISOString() : null,
+    resetInMs: resetAtMs ? Math.max(0, resetAtMs - Date.now()) : null,
+    slopePercentPerHour,
+    exhaustedAt,
+    exhaustionInMs: exhaustedAt ? Math.max(0, new Date(exhaustedAt).getTime() - Date.now()) : null,
+    exhaustionConfidence,
+    points: points.slice(-48),
+  };
+}
+
+async function readUsageMetrics() {
+  if (usageCache.payload && Date.now() < usageCache.expiresAt) return usageCache.payload;
+
+  const files = await walkJsonlFiles(sessionsRoot);
+  const snapshots = [];
+
+  await Promise.all(files.map(async (filePath) => {
+    try {
+      const tail = await readTail(filePath, 768 * 1024);
+      snapshots.push(...parseUsageSnapshots(tail.text));
+    } catch {
+      // Ignore inaccessible or transient session files.
+    }
+  }));
+
+  snapshots.sort((a, b) => new Date(a.at) - new Date(b.at));
+  const latest = snapshots.at(-1) || null;
+
+  const payload = latest ? {
+    available: true,
+    refreshedAt: new Date().toISOString(),
+    latestAt: latest.at,
+    limitId: latest.limitId,
+    planType: latest.planType,
+    rateLimitReachedType: latest.rateLimitReachedType,
+    primary: buildUsageWindow("primary", latest, snapshots),
+    secondary: buildUsageWindow("secondary", latest, snapshots),
+  } : {
+    available: false,
+    refreshedAt: new Date().toISOString(),
+    message: "No local token_count rate limit events found.",
+  };
+
+  usageCache.payload = payload;
+  usageCache.expiresAt = Date.now() + 15_000;
+  return payload;
 }
 
 function processIsAlive(pid) {
@@ -611,6 +756,7 @@ async function loadThreads() {
   const spawnEdges = readSpawnEdges();
   const goals = readGoals();
   const logHealth = readLogHealth();
+  const usage = await readUsageMetrics();
 
   const sessionSummaries = new Map();
   await Promise.all(Array.from(unique.entries()).map(async ([id, thread]) => {
@@ -639,6 +785,7 @@ async function loadThreads() {
     statusWindows,
     refreshedAt,
     summary: computeSummary(threads, refreshedAt),
+    usage,
     threads,
   };
 }
@@ -695,6 +842,11 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === "/api/health") {
       sendJson(res, 200, { ok: true, codexHome, now: new Date().toISOString() });
+      return;
+    }
+
+    if (url.pathname === "/api/usage") {
+      sendJson(res, 200, await readUsageMetrics());
       return;
     }
 

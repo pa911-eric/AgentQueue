@@ -16,6 +16,7 @@ const state = {
   hideDone: true,
   focusMode: false,
   panelCollapsed: false,
+  usage: null,
   selectedThreadId: null,
   lastSnapshotAt: null,
 };
@@ -42,6 +43,10 @@ const detailTitle = document.querySelector("#detailTitle");
 const detailSubtitle = document.querySelector("#detailSubtitle");
 const detailContent = document.querySelector("#detailContent");
 const cardMenu = document.querySelector("#cardMenu");
+const usagePanel = document.querySelector("#usagePanel");
+const usageHeadline = document.querySelector("#usageHeadline");
+const usagePlan = document.querySelector("#usagePlan");
+const usageWindows = document.querySelector("#usageWindows");
 let menuThreadId = null;
 
 const quickFilterDefs = [
@@ -131,6 +136,24 @@ function formatClock(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "--";
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+}
+
+function formatDurationMs(value) {
+  if (value == null) return "--";
+  const ms = Math.max(0, Number(value));
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+
+  if (ms < minute) return "now";
+  if (ms < hour) return `${Math.round(ms / minute)}m`;
+  if (ms < day) return `${Math.round(ms / hour)}h`;
+  return `${Math.round(ms / day)}d`;
+}
+
+function formatPercent(value) {
+  if (!Number.isFinite(Number(value))) return "--";
+  return `${Math.round(Number(value))}%`;
 }
 
 function compactPath(value) {
@@ -453,6 +476,82 @@ function renderMetrics() {
   activeFilters.textContent = describeFilters();
 }
 
+function usageEstimateText(window) {
+  if (!window) return "No estimate";
+  if (window.exhaustionConfidence === "after reset") return "Not before reset";
+  if (window.exhaustionConfidence === "flat") return "Flat use";
+  if (window.exhaustionConfidence === "insufficient") return "Need more samples";
+  if (window.exhaustionInMs == null) return "No estimate";
+  return `${formatDurationMs(window.exhaustionInMs)} to empty`;
+}
+
+function renderUsageChart(points) {
+  const width = 210;
+  const height = 48;
+  const usableWidth = width - 8;
+  const usableHeight = height - 8;
+  const chartPoints = (points || []).slice(-36);
+
+  if (chartPoints.length < 2) {
+    return `<svg viewBox="0 0 ${width} ${height}" aria-hidden="true"><line x1="4" y1="${height - 6}" x2="${width - 4}" y2="${height - 6}" /></svg>`;
+  }
+
+  const times = chartPoints.map((point) => new Date(point.at).getTime());
+  const minTime = Math.min(...times);
+  const maxTime = Math.max(...times);
+  const span = Math.max(1, maxTime - minTime);
+  const path = chartPoints.map((point) => {
+    const x = 4 + ((new Date(point.at).getTime() - minTime) / span) * usableWidth;
+    const y = 4 + ((100 - point.remainingPercent) / 100) * usableHeight;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+
+  return `
+    <svg viewBox="0 0 ${width} ${height}" aria-hidden="true">
+      <line x1="4" y1="4" x2="${width - 4}" y2="4" />
+      <line x1="4" y1="${height - 6}" x2="${width - 4}" y2="${height - 6}" />
+      <polyline points="${path}" />
+    </svg>
+  `;
+}
+
+function renderUsageWindow(window) {
+  if (!window) return "";
+  const resetText = window.resetInMs == null ? "--" : formatDurationMs(window.resetInMs);
+  const slope = window.slopePercentPerHour ? `${window.slopePercentPerHour.toFixed(1)}%/h` : "--";
+
+  return `
+    <article class="usage-window">
+      <header>
+        <span>${escapeHtml(window.label)}</span>
+        <strong>${escapeHtml(formatPercent(window.remainingPercent))} left</strong>
+      </header>
+      <div class="usage-bar" aria-hidden="true"><span style="width: ${Math.max(0, Math.min(100, window.usedPercent))}%"></span></div>
+      ${renderUsageChart(window.points)}
+      <dl>
+        <div><dt>Used</dt><dd>${escapeHtml(formatPercent(window.usedPercent))}</dd></div>
+        <div><dt>Reset</dt><dd>${escapeHtml(resetText)}</dd></div>
+        <div><dt>Burn</dt><dd>${escapeHtml(slope)}</dd></div>
+        <div><dt>Estimate</dt><dd>${escapeHtml(usageEstimateText(window))}</dd></div>
+      </dl>
+    </article>
+  `;
+}
+
+function renderUsage() {
+  const usage = state.usage;
+  if (!usage?.available) {
+    usagePanel.hidden = true;
+    return;
+  }
+
+  const primary = usage.primary;
+  usagePanel.hidden = false;
+  usageHeadline.textContent = primary ? `${formatPercent(primary.remainingPercent)} primary remaining` : "Usage data available";
+  usagePlan.textContent = usage.planType || usage.limitId || "";
+  usageWindows.innerHTML = [renderUsageWindow(usage.primary), renderUsageWindow(usage.secondary)].filter(Boolean).join("");
+}
+
 function describeFilters() {
   const filters = [];
   if (state.quickFilter !== "all") filters.push(quickFilterDefs.find((filter) => filter.id === state.quickFilter)?.label || state.quickFilter);
@@ -671,6 +770,7 @@ function render() {
   renderQuickFilters();
   const filtered = getBoardThreads();
   renderMetrics();
+  renderUsage();
   renderBoard(filtered);
   if (state.selectedThreadId) showDetails(state.selectedThreadId);
 }
@@ -678,6 +778,7 @@ function render() {
 async function applySnapshot(data) {
   state.threads = data.threads || [];
   state.summary = data.summary || null;
+  state.usage = data.usage || null;
   state.lastSnapshotAt = data.refreshedAt || new Date().toISOString();
   document.querySelector("#connectionState").textContent = data.error ? "Issue" : "Live";
   render();
