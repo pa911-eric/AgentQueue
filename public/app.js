@@ -133,6 +133,7 @@ function childStats(thread) {
     errors: children.reduce((sum, child) => sum + (child.logHealth?.errors24h || 0), 0),
     liveProcesses: children.reduce((sum, child) => sum + (child.liveProcessCount || 0), 0),
     tokens: children.reduce((sum, child) => sum + (child.tokensUsed || 0), 0),
+    activeGoals: children.filter((child) => child.goal?.status === "active").length,
   };
 }
 
@@ -146,12 +147,16 @@ function getDisplaySubtitle(thread) {
     const children = getChildThreads(thread).length;
     if (children) return `${children} subagents`;
     if (thread.projectless) return "Projectless";
-    if (thread.workspace) return compactPath(thread.workspace);
     return `ID: ${thread.id.slice(0, 8)}`;
   }
   const agent = thread.agentNickname || "Subagent";
   const role = thread.agentRole ? ` / ${thread.agentRole}` : "";
   return `${agent}${role} subagent`;
+}
+
+function getProjectLabel(thread) {
+  const parent = getParentThread(thread);
+  return compactPath(thread.workspace || thread.outputDirectory || parent?.workspace || parent?.outputDirectory);
 }
 
 function getPromptText(thread) {
@@ -296,13 +301,10 @@ function renderCard(thread) {
   else if (thread.logHealth?.warnings24h || stats.warnings) meta.append(makeMeta("Warnings", thread.logHealth.warnings24h + stats.warnings));
 
   const badges = card.querySelector(".badges");
-  badges.append(makeBadge(columns.find((column) => column.id === displayStatus)?.title || thread.statusLabel, displayStatus));
-  if (thread.unread || stats.unread) badges.append(makeBadge(stats.unread ? `${stats.unread} unread` : "unread", "danger"));
-  if (thread.liveProcessCount && thread.fullAccess) badges.append(makeBadge("live full access", "danger"));
-  else if (thread.liveProcessCount || stats.liveProcesses) badges.append(makeBadge("live terminal", "process"));
-  if (thread.runningStale) badges.append(makeBadge("stale", "warning"));
-  if (thread.threadSource === "subagent") badges.append(makeBadge(thread.agentRole ? `subagent ${thread.agentRole}` : "subagent", "strong"));
-  if (stats.total) badges.append(makeBadge(`${stats.total} subagents`, "strong"));
+  if (thread.goal?.status === "active" || stats.activeGoals) badges.append(makeBadge(stats.activeGoals > 1 ? `${stats.activeGoals} active goals` : "goal active", "process"));
+  const projectLabel = getProjectLabel(thread);
+  if (projectLabel) badges.append(makeBadge(projectLabel, "project"));
+  if (!badges.children.length) badges.hidden = true;
 
   const childSummary = card.querySelector(".child-summary");
   if (stats.total) {
