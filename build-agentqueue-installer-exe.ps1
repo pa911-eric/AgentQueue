@@ -27,7 +27,10 @@ Copy-Item -LiteralPath $sourceInstall -Destination (Join-Path $staging "install.
 Set-Content -Path (Join-Path $staging "run-installer.cmd") -Value @'
 @echo off
 setlocal
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install.ps1" -Launch
+title AgentQueue Installer
+echo.
+echo [AgentQueue Installer] Starting installation...
+powershell -NoProfile -NoExit -ExecutionPolicy Bypass -File "%~dp0install.ps1" -Launch
 '@ -NoNewline
 
 Set-Content -Path $sedPath -Value @"
@@ -36,7 +39,7 @@ Class=IEXPRESS
 SEDVersion=3
 [Options]
 PackagePurpose=InstallApp
-ShowInstallProgramWindow=0
+ShowInstallProgramWindow=1
 HideExtractAnimation=1
 UseLongFileName=1
 InsideCompressed=1
