@@ -36,6 +36,8 @@ AgentQueue reads your local Codex state and gives you a live board of what is ru
 Use this direct link to download and run the installer script:
 https://github.com/pa911-eric/AgentQueue/releases/latest/download/install.ps1
 
+The script prints progress, writes a timestamped install log to `%TEMP%\AgentQueue-install-*.log`, and now launches the dashboard automatically after install.
+
 If you prefer markdown:
 
 [Download and run the installer](https://github.com/pa911-eric/AgentQueue/releases/latest/download/install.ps1) to install AgentQueue in one step.
