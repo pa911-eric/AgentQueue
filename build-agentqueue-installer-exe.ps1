@@ -27,10 +27,24 @@ Copy-Item -LiteralPath $sourceInstall -Destination (Join-Path $staging "install.
 Set-Content -Path (Join-Path $staging "run-installer.cmd") -Value @'
 @echo off
 setlocal
+set "PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+if not exist "%PS%" set "PS=powershell"
 title AgentQueue Installer
 echo.
 echo [AgentQueue Installer] Starting installation...
-powershell -NoProfile -NoExit -ExecutionPolicy Bypass -File "%~dp0install.ps1" -Launch
+"%PS%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0install.ps1" -Launch
+set "EXIT_CODE=%ERRORLEVEL%"
+if "%EXIT_CODE%"=="0" (
+  echo [AgentQueue Installer] Completed successfully.
+  echo [AgentQueue Installer] Dashboard should now be available at http://localhost:4173
+) else (
+  echo [AgentQueue Installer] Installation finished with exit code %EXIT_CODE%.
+  echo [AgentQueue Installer] If the install failed, rerun this launcher from a new window.
+)
+echo.
+echo Press any key to close this window.
+pause > nul
+exit /b %EXIT_CODE%
 '@ -NoNewline
 
 Set-Content -Path $sedPath -Value @"

@@ -40,7 +40,7 @@ function Wait-ForDashboard($url, [int]$maxWaitSeconds = 15) {
 
 function Open-Browser($url) {
   try {
-    Start-Process "cmd.exe" -ArgumentList "/c", "start", "","`"$url`""
+    Start-Process $url
   } catch {
     Write-Step "Could not auto-open the browser. Open manually: $url"
   }
@@ -94,7 +94,11 @@ try {
   } else {
     Write-Step "Run this to start AgentQueue now: `"$InstallPath\\start-dashboard.cmd`""
   }
-}
-finally {
+} catch {
+  Write-Step "Install failed: $($_.Exception.Message)"
+  Write-Step "Log file: $logPath"
+  throw
+} finally {
   Stop-Transcript | Out-Null
+  Write-Step "Done."
 }
