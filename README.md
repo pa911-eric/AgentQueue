@@ -15,6 +15,7 @@ AgentQueue reads your local Codex state and gives you a live board of what is ru
 - Usage limit panel with primary/secondary reset windows, burn rate, and burndown charts when local `token_count` events are available.
 - Right-click card menu for details, opening threads, copying IDs/links/titles, and marking local unread state as read.
 - Quick filters for review, risk, unread, projectless, and subagent work.
+- <img width="584" height="349" alt="image" src="https://github.com/user-attachments/assets/371353a4-0c4b-4d80-8706-19303f4304a2" />
 - Sort modes for status priority, newest activity, longest running, and risk first.
 - Local-only data access. No telemetry, account service, or npm install required.
 
