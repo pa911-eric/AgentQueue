@@ -160,7 +160,7 @@ h1 {
 
 .panel-header {
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 30px;
   gap: 10px;
   align-items: center;
 }
@@ -254,9 +254,10 @@ body.is-resizing .panel-resize-handle::after {
 .menu-button {
   display: inline-grid;
   place-items: center;
-  width: 36px;
-  min-width: 36px;
-  min-height: 36px;
+  justify-self: end;
+  width: 30px;
+  min-width: 30px;
+  min-height: 30px;
   padding: 0;
 }
 
@@ -264,7 +265,7 @@ body.is-resizing .panel-resize-handle::after {
 .menu-button span::before,
 .menu-button span::after {
   display: block;
-  width: 16px;
+  width: 14px;
   height: 2px;
   border-radius: 999px;
   background: var(--primary);
@@ -282,11 +283,11 @@ body.is-resizing .panel-resize-handle::after {
 }
 
 .menu-button span::before {
-  top: -5px;
+  top: -4px;
 }
 
 .menu-button span::after {
-  top: 5px;
+  top: 4px;
 }
 
 .search {
@@ -1064,11 +1065,11 @@ time {
   }
 
   .panel-header {
-    grid-template-columns: 36px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) 30px;
   }
 
   .sidebar-collapsed .panel-header {
-    grid-template-columns: 36px;
+    grid-template-columns: 30px;
   }
 
   .panel-resize-handle {
