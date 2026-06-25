@@ -518,12 +518,45 @@ body.is-resizing .panel-resize-handle::after {
 }
 
 .column {
+  --column-accent: var(--primary);
+  --column-accent-soft: var(--surface-mid);
+  --column-accent-border: var(--outline);
   min-width: 0;
   min-height: calc(100vh - 52px);
   border: 1px solid var(--outline);
   border-radius: var(--radius);
   background: transparent;
   overflow: hidden;
+}
+
+.column[data-status="running"] {
+  --column-accent: #00714d;
+  --column-accent-soft: #dff8ec;
+  --column-accent-border: #74d7b0;
+}
+
+.column[data-status="complete"] {
+  --column-accent: #1d4ed8;
+  --column-accent-soft: #eff6ff;
+  --column-accent-border: #bfdbfe;
+}
+
+.column[data-status="recent"] {
+  --column-accent: #6d28d9;
+  --column-accent-soft: #f5f3ff;
+  --column-accent-border: #ddd6fe;
+}
+
+.column[data-status="today"] {
+  --column-accent: #92400e;
+  --column-accent-soft: #fffbeb;
+  --column-accent-border: #fcd34d;
+}
+
+.column[data-status="done"] {
+  --column-accent: #475569;
+  --column-accent-soft: #f1f5f9;
+  --column-accent-border: #cbd5e1;
 }
 
 .column > header {
@@ -533,11 +566,13 @@ body.is-resizing .panel-resize-handle::after {
   gap: 8px;
   min-height: 52px;
   padding: 8px 10px;
-  background: var(--surface-mid);
-  border-bottom: 1px solid var(--outline);
+  background: var(--column-accent-soft);
+  border-bottom: 1px solid var(--column-accent-border);
+  box-shadow: inset 3px 0 0 var(--column-accent);
 }
 
 .column h2 {
+  color: var(--column-accent);
   font-size: 16px;
   line-height: 20px;
   font-weight: 700;
@@ -553,10 +588,10 @@ body.is-resizing .panel-resize-handle::after {
 .count {
   min-width: 30px;
   padding: 2px 7px;
-  border: 1px solid var(--outline);
+  border: 1px solid var(--column-accent-border);
   border-radius: var(--radius-soft);
-  background: var(--surface);
-  color: var(--primary);
+  background: color-mix(in srgb, var(--column-accent-soft) 45%, var(--surface));
+  color: var(--column-accent);
   text-align: center;
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 12px;
