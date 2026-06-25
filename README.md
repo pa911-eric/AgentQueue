@@ -27,6 +27,22 @@ AgentQueue reads your local Codex state and gives you a live board of what is ru
 - Node.js 24 or newer is recommended because it can read Codex's local SQLite thread inventory through `node:sqlite`.
 - Codex desktop local state in the default Codex home directory.
 
+## Quick install (one click)
+
+PowerShell one-liner (downloads and installs AgentQueue `v0.1.0` from the GitHub tag, then opens the install folder):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/pa911-eric/AgentQueue/v0.1.0/install.ps1 -UseBasicParsing | iex"
+```
+
+To also launch immediately after install:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/pa911-eric/AgentQueue/v0.1.0/install.ps1 -UseBasicParsing -OutFile $env:TEMP\agentqueue-install.ps1; & $env:TEMP\agentqueue-install.ps1 -Launch"
+```
+
+To install a different version, use `-Version` (for example, `-Version 0.1.0`).
+
 ## Run
 
 ```powershell
