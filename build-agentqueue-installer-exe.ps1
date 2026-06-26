@@ -32,7 +32,7 @@ if not exist "%PS%" set "PS=powershell"
 title AgentQueue Installer
 echo.
 echo [AgentQueue Installer] Starting installation...
-"%PS%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0install.ps1" -Launch
+"%PS%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0install.ps1" -Launch -NoPause
 set "EXIT_CODE=%ERRORLEVEL%"
 if "%EXIT_CODE%"=="0" (
   echo [AgentQueue Installer] Completed successfully.

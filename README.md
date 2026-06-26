@@ -33,20 +33,25 @@ AgentQueue reads your local Codex state and gives you a live board of what is ru
 
 ### One-click installer (recommended)
 
-Use this direct link to download and run the installer script:
-https://github.com/pa911-eric/AgentQueue/releases/latest/download/install.ps1
+Use this one-command install flow for each platform:
 
-The script prints progress, writes a timestamped install log to `%TEMP%\AgentQueue-install-*.log`, and now launches the dashboard automatically after install.
-
-If you prefer markdown:
-
-[Download and run the installer](https://github.com/pa911-eric/AgentQueue/releases/latest/download/install.ps1) to install AgentQueue in one step.
-
-### One-click PowerShell command (Windows)
-
+**Windows**
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://github.com/pa911-eric/AgentQueue/releases/latest/download/install.ps1 -UseBasicParsing -OutFile $env:TEMP\agentqueue-install.ps1; & $env:TEMP\agentqueue-install.ps1 -Launch"
 ```
+
+**macOS / Linux**
+```bash
+curl -fsSL https://github.com/pa911-eric/AgentQueue/releases/latest/download/install.sh -o /tmp/agentqueue-install.sh && \
+chmod +x /tmp/agentqueue-install.sh && \
+bash /tmp/agentqueue-install.sh --launch
+```
+
+Both installers now print explicit step-by-step status, a final summary, and the install log path.
+Install defaults:
+
+- Windows default path: `%LOCALAPPDATA%\AgentQueue`
+- macOS/Linux default path: `~/.local/share/AgentQueue`
 
 If you need a legacy EXE install:
 
