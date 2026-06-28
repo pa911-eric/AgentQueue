@@ -567,7 +567,7 @@ function normalizeTag(value) {
   return String(value || "")
     .trim()
     .replace(/\s+/g, "-")
-    .replace(/[^a-zA-Z0-9_.:-]/g, "")
+    .replace(/[^a-zA-Z0-9_.:@&/-]/g, "")
     .toLowerCase()
     .slice(0, 40);
 }
@@ -803,6 +803,7 @@ function parseUsageSnapshots(text) {
       snapshots.push({
         at: item.timestamp,
         limitId: limits.limit_id || "codex",
+        limitName: limits.limit_name || null,
         planType: limits.plan_type || null,
         rateLimitReachedType: limits.rate_limit_reached_type || null,
         primary: limits.primary || null,
@@ -826,6 +827,16 @@ function formatWindowLabel(minutes) {
   return `${minutes}m`;
 }
 
+function normalizeLimitId(limitId) {
+  return String(limitId || "codex").trim() || "codex";
+}
+
+function usageLimitDisplayName(limitId, bucketLabel) {
+  const normalizedLimitId = normalizeLimitId(limitId);
+  if (normalizedLimitId === "codex") return bucketLabel;
+  return `${normalizedLimitId} ${bucketLabel}`;
+}
+
 function isSameUsageWindow(limit, resetAtMs, windowMinutes) {
   if (!limit) return false;
   const limitResetAtMs = Number(limit.resets_at || 0) * 1000;
@@ -835,15 +846,20 @@ function isSameUsageWindow(limit, resetAtMs, windowMinutes) {
   return Math.abs(limitResetAtMs - resetAtMs) <= 60_000;
 }
 
-function buildUsageWindow(label, latest, snapshots) {
+function buildUsageWindow(limitId, label, latest, snapshots) {
+  const resolvedLimitId = normalizeLimitId(limitId);
   const current = latest?.[label];
   if (!current || typeof current.used_percent !== "number") return null;
 
   const resetAtMs = Number(current.resets_at || 0) * 1000;
   const windowMinutes = Number(current.window_minutes || 0);
   const usedPercent = Number(current.used_percent);
+  const bucketLabel = label === "primary" ? `Primary ${formatWindowLabel(windowMinutes)}` : `Secondary ${formatWindowLabel(windowMinutes)}`;
+  const shortLabel = usageLimitDisplayName(resolvedLimitId, bucketLabel);
+
   const points = snapshots
     .map((snapshot) => {
+      if (normalizeLimitId(snapshot.limitId) !== resolvedLimitId) return null;
       const limit = snapshot[label];
       if (!isSameUsageWindow(limit, resetAtMs, windowMinutes)) return null;
       return {
@@ -866,7 +882,11 @@ function buildUsageWindow(label, latest, snapshots) {
 
   return {
     key: label,
-    label: label === "primary" ? `Primary ${formatWindowLabel(windowMinutes)}` : `Secondary ${formatWindowLabel(windowMinutes)}`,
+    groupKey: `${resolvedLimitId}:${label}`,
+    limitId: resolvedLimitId,
+    limitName: latest?.limitName || null,
+    label: bucketLabel,
+    shortLabel,
     usedPercent: maxUsedPercent,
     remainingPercent: Math.max(0, 100 - maxUsedPercent),
     windowMinutes,
@@ -874,6 +894,37 @@ function buildUsageWindow(label, latest, snapshots) {
     resetInMs: resetAtMs ? Math.max(0, resetAtMs - Date.now()) : null,
     points: points.slice(-48),
   };
+}
+
+function buildUsageWindowsFromSnapshots(snapshots) {
+  const latestByLimit = new Map();
+
+  for (let i = snapshots.length - 1; i >= 0; i--) {
+    const snapshot = snapshots[i];
+    const limitId = normalizeLimitId(snapshot.limitId);
+    if (!latestByLimit.has(limitId)) latestByLimit.set(limitId, snapshot);
+  }
+
+  const windows = [];
+  for (const [limitId, snapshot] of latestByLimit.entries()) {
+    for (const label of ["primary", "secondary"]) {
+      const window = buildUsageWindow(limitId, label, snapshot, snapshots);
+      if (window) windows.push(window);
+    }
+  }
+
+  windows.sort((a, b) => {
+    if (a.limitId !== b.limitId) {
+      if (a.limitId === "codex") return -1;
+      if (b.limitId === "codex") return 1;
+      return a.limitId.localeCompare(b.limitId);
+    }
+
+    if (a.key !== b.key) return a.key === "primary" ? -1 : 1;
+    return 0;
+  });
+
+  return windows;
 }
 
 async function readUsageMetrics() {
@@ -901,6 +952,10 @@ async function readUsageMetrics() {
 
   snapshots.sort((a, b) => new Date(a.at) - new Date(b.at));
   const latest = snapshots.at(-1) || null;
+  const windows = latest ? buildUsageWindowsFromSnapshots(snapshots) : [];
+  const activeLimitId = latest ? normalizeLimitId(latest.limitId) : "codex";
+  const legacyPrimary = windows.find((window) => window.groupKey === `${activeLimitId}:primary`) || buildUsageWindow(activeLimitId, "primary", latest, snapshots);
+  const legacySecondary = windows.find((window) => window.groupKey === `${activeLimitId}:secondary`) || buildUsageWindow(activeLimitId, "secondary", latest, snapshots);
 
   const payload = latest ? {
     available: true,
@@ -909,8 +964,9 @@ async function readUsageMetrics() {
     limitId: latest.limitId,
     planType: latest.planType,
     rateLimitReachedType: latest.rateLimitReachedType,
-    primary: buildUsageWindow("primary", latest, snapshots),
-    secondary: buildUsageWindow("secondary", latest, snapshots),
+    windows,
+    primary: legacyPrimary || null,
+    secondary: legacySecondary || null,
   } : {
     available: false,
     refreshedAt: new Date().toISOString(),
@@ -1005,6 +1061,7 @@ function readThreadsFromSqlite() {
     order by coalesce(updated_at_ms, updated_at * 1000) desc
   `).map((row) => ({
     id: row.id,
+    title: row.title,
     thread_name: row.title,
     preview: row.preview,
     rolloutPath: row.rollout_path,
@@ -1172,10 +1229,13 @@ function removeUnreadIdsFromStore(store, ids) {
 }
 
 async function writeGlobalState(state, atomState = null, atomStateWasString = false) {
+  if (!state || typeof state !== "object") state = {};
   if (atomStateWasString && atomState) {
     state["electron-persisted-atom-state"] = JSON.stringify(atomState);
+  } else if (atomState && typeof atomState === "object") {
+    state["electron-persisted-atom-state"] = atomState;
   }
-  await writeJsonFileAtomic(globalStatePath, state && typeof state === "object" ? state : {});
+  await writeJsonFileAtomic(globalStatePath, state);
 }
 
 function normalizeIdArray(value) {
@@ -1207,7 +1267,7 @@ async function setThreadState(threadId, updates, sourceProvider = null) {
   if (!isThreadId(threadId)) throw new Error("Invalid thread id");
   if (!updates || typeof updates !== "object" || Array.isArray(updates)) throw new Error("Request body must be an object");
 
-  const allowedKeys = new Set(["pinned", "projectless"]);
+  const allowedKeys = new Set(["pinned", "projectless", "archived"]);
   const next = {};
   for (const [key, value] of Object.entries(updates)) {
     if (!allowedKeys.has(key)) throw new Error(`Unsupported thread state field: ${key}`);
@@ -1218,7 +1278,7 @@ async function setThreadState(threadId, updates, sourceProvider = null) {
 
   const targetProvider = sourceProvider || await getThreadProvider(threadId) || provider;
   if (targetProvider === "claude") {
-    // Claude Code has no global UI-state store, so pins/projectless live in
+    // Claude Code has no global UI-state store, so pins/projectless/archive live in
     // AgentQueue's own non-destructive sidecar.
     const localState = await readLocalState();
     const result = { threadId };
@@ -1229,6 +1289,10 @@ async function setThreadState(threadId, updates, sourceProvider = null) {
     if (Object.prototype.hasOwnProperty.call(next, "projectless")) {
       localState.projectless = setIdInArrayStore(localState.projectless, threadId, next.projectless);
       result.projectless = localState.projectless.includes(threadId);
+    }
+    if (Object.prototype.hasOwnProperty.call(next, "archived")) {
+      localState.archived = setIdInArrayStore(localState.archived, threadId, next.archived);
+      result.archived = localState.archived.includes(threadId);
     }
     await writeLocalState(localState);
     return result;
@@ -1244,6 +1308,9 @@ async function setThreadState(threadId, updates, sourceProvider = null) {
   }
   if (Object.prototype.hasOwnProperty.call(next, "projectless")) {
     result.projectless = writeThreadFlag(state, atomState, "projectless-thread-ids", threadId, next.projectless);
+  }
+  if (Object.prototype.hasOwnProperty.call(next, "archived")) {
+    result.archived = writeThreadFlag(state, atomState, "archived-thread-ids", threadId, next.archived);
   }
 
   await writeGlobalState(state, atomState, atomStateWasString);
@@ -1324,6 +1391,7 @@ function enrichThread(thread, context) {
   const permissionsById = state["heartbeat-thread-permissions-by-id"] || atomState["heartbeat-thread-permissions-by-id"] || {};
   const pinnedIds = new Set(state["pinned-thread-ids"] || atomState["pinned-thread-ids"] || []);
   const projectlessIds = new Set(state["projectless-thread-ids"] || atomState["projectless-thread-ids"] || []);
+  const archivedIds = new Set(state["archived-thread-ids"] || atomState["archived-thread-ids"] || []);
   const workspaceHints = state["thread-workspace-root-hints"] || atomState["thread-workspace-root-hints"] || {};
   const outputDirs = state["thread-projectless-output-directories"] || atomState["thread-projectless-output-directories"] || {};
   const promptHistory = atomState["prompt-history"] || state["prompt-history"] || {};
@@ -1354,6 +1422,7 @@ function enrichThread(thread, context) {
 
   return {
     id: thread.id,
+    title: thread.title || thread.thread_name || "Untitled thread",
     name: thread.thread_name || "Untitled thread",
     preview: thread.preview || thread.lastPrompt || null,
     status,
@@ -1367,7 +1436,7 @@ function enrichThread(thread, context) {
     runningSince: status === "running" ? (session?.lastUserAt || session?.lastMeaningfulAt || activityAt) : null,
     runningStale,
     aborted: Boolean(session?.turnAbortedAt),
-    archived: Boolean(thread.archived),
+    archived: Boolean(thread.archived || archivedIds.has(thread.id)),
     unread: unreadIds.has(thread.id),
     pinned: pinnedIds.has(thread.id),
     projectless: projectlessIds.has(thread.id),
@@ -1445,6 +1514,7 @@ async function readLocalState() {
   return {
     pinned: normalizeIdArray(value && value.pinned),
     projectless: normalizeIdArray(value && value.projectless),
+    archived: normalizeIdArray(value && value.archived),
   };
 }
 
@@ -1452,6 +1522,7 @@ async function writeLocalState(next) {
   await writeJsonFileAtomic(localStatePath, {
     pinned: normalizeIdArray(next.pinned),
     projectless: normalizeIdArray(next.projectless),
+    archived: normalizeIdArray(next.archived),
   });
 }
 
@@ -1688,6 +1759,7 @@ async function loadClaudeThreads() {
     const title = truncate(meta.title || meta.firstPrompt, 120) || "Claude session";
     rawThreads.push({
       id,
+      title,
       thread_name: title,
       preview: truncate(meta.firstPrompt, 200),
       rolloutPath: filePath,
@@ -1717,6 +1789,7 @@ async function loadClaudeThreads() {
     "prompt-history": promptHistory,
     "pinned-thread-ids": localState.pinned,
     "projectless-thread-ids": localState.projectless,
+    "archived-thread-ids": localState.archived,
   };
 
   const context = {
@@ -2517,6 +2590,7 @@ function getOpenApiDocument() {
           properties: {
             pinned: { type: "boolean" },
             projectless: { type: "boolean" },
+            archived: { type: "boolean" },
           },
           additionalProperties: false,
         },

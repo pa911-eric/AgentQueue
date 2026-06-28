@@ -14,7 +14,6 @@ const state = {
   quickFilter: "all",
   activeTag: "",
   sortMode: "priority",
-  viewMode: "board",
   mobileColumn: "running",
   hideDone: true,
   focusMode: false,
@@ -27,6 +26,7 @@ const state = {
   webhook: null,
   selectedThreadId: null,
   lastSnapshotAt: null,
+  projectColors: {},
 };
 
 const preferencesKey = "agentqueue-preferences-v1";
@@ -56,9 +56,7 @@ const statusFilters = document.querySelector("#statusFilters");
 const quickFilters = document.querySelector("#quickFilters");
 const tagFilterSection = document.querySelector("#tagFilterSection");
 const tagFilters = document.querySelector("#tagFilters");
-const viewModes = document.querySelector("#viewModes");
 const sortMode = document.querySelector("#sortMode");
-const sortTiers = document.querySelector("#sortTiers");
 const columnSwitcher = document.querySelector("#columnSwitcher");
 const panelToggle = document.querySelector("#panelToggle");
 const controlPanel = document.querySelector("#controlPanel");
@@ -93,6 +91,12 @@ const webhookIncludeSubagents = document.querySelector("#webhookIncludeSubagents
 const webhookSigningToken = document.querySelector("#webhookSigningToken");
 const webhookFeedback = document.querySelector("#webhookFeedback");
 const testWebhook = document.querySelector("#testWebhook");
+const newTagModal = document.querySelector("#newTagModal");
+const newTagForm = document.querySelector("#newTagForm");
+const newTagInput = document.querySelector("#newTagInput");
+const newTagFeedback = document.querySelector("#newTagFeedback");
+const closeNewTagModalButton = document.querySelector("#closeNewTagModal");
+const cancelNewTag = document.querySelector("#cancelNewTag");
 let menuThreadId = null;
 
 const quickFilterDefs = [
@@ -106,10 +110,6 @@ const quickFilterDefs = [
   { id: "subagents", label: "Subagents", tip: "Show subagent threads and parents with subagents" },
 ];
 
-const viewModeDefs = [
-  { id: "board", label: "Board", tip: "Show threads grouped by status columns" },
-  { id: "list", label: "List", tip: "Show a condensed monitor list" },
-];
 const webhookStatusIds = ["running", "complete", "recent", "today", "done"];
 
 const sortModeDefs = {
@@ -131,6 +131,16 @@ const sortModeDefs = {
   },
 };
 
+const projectColorPalette = [
+  { id: "indigo", label: "Indigo", background: "#e0e7ff", border: "#818cf8", text: "#312e81" },
+  { id: "violet", label: "Violet", background: "#f3e8ff", border: "#c4b5fd", text: "#5b21b6" },
+  { id: "purple", label: "Purple", background: "#f5f3ff", border: "#a78bfa", text: "#4c1d95" },
+  { id: "pink", label: "Pink", background: "#fce7f3", border: "#f9a8d4", text: "#7c2d6f" },
+  { id: "teal", label: "Teal", background: "#ccfbf1", border: "#2dd4bf", text: "#0f766e" },
+  { id: "slate", label: "Slate", background: "#e2e8f0", border: "#94a3b8", text: "#334155" },
+  { id: "stone", label: "Stone", background: "#f5f3ef", border: "#bdad95", text: "#5a4d38" },
+];
+
 function readPreferences() {
   try {
     const saved = localStorage.getItem(preferencesKey) || localStorage.getItem(legacyPreferencesKey);
@@ -147,15 +157,15 @@ function savePreferences() {
     quickFilter: state.quickFilter,
     activeTag: state.activeTag,
     sortMode: state.sortMode,
-    viewMode: state.viewMode,
     mobileColumn: state.mobileColumn,
     hideDone: state.hideDone,
     focusMode: state.focusMode,
     panelCollapsed: state.panelCollapsed,
-    sidebarDesignVersion: 2,
+    sidebarDesignVersion: 3,
     panelWidth: state.panelWidth,
     timelinePanelCollapsed: state.timelinePanelCollapsed,
     timelinePanelWidth: state.timelinePanelWidth,
+    projectColors: state.projectColors,
   }));
 }
 
@@ -171,7 +181,6 @@ function restorePreferences() {
   if (quickFilterDefs.some((filter) => filter.id === prefs.quickFilter)) state.quickFilter = prefs.quickFilter;
   if (typeof prefs.activeTag === "string") state.activeTag = prefs.activeTag;
   if (Object.hasOwn(sortModeDefs, prefs.sortMode)) state.sortMode = prefs.sortMode;
-  if (viewModeDefs.some((mode) => mode.id === prefs.viewMode)) state.viewMode = prefs.viewMode;
   if (columns.some((column) => column.id === prefs.mobileColumn)) state.mobileColumn = prefs.mobileColumn;
   if (Object.hasOwn(prefs, "hideDone")) state.hideDone = Boolean(prefs.hideDone);
   if (Number.isFinite(Number(prefs.panelWidth))) {
@@ -184,6 +193,15 @@ function restorePreferences() {
   state.focusMode = Boolean(prefs.focusMode);
   state.panelCollapsed = Boolean(prefs.panelCollapsed);
   if (Object.hasOwn(prefs, "timelinePanelCollapsed")) state.timelinePanelCollapsed = Boolean(prefs.timelinePanelCollapsed);
+  if (typeof prefs.projectColors === "object" && prefs.projectColors !== null) {
+    const nextProjectColors = {};
+    for (const [projectKey, colorId] of Object.entries(prefs.projectColors)) {
+      if (typeof projectKey !== "string" || !projectKey) continue;
+      const normalizedColorId = normalizeProjectColorId(colorId);
+      if (normalizedColorId) nextProjectColors[projectKey] = normalizedColorId;
+    }
+    state.projectColors = nextProjectColors;
+  }
 
   search.value = state.query;
   sortMode.value = state.sortMode;
@@ -203,9 +221,71 @@ function normalizeTag(value) {
   return String(value || "")
     .trim()
     .replace(/\s+/g, "-")
-    .replace(/[^a-zA-Z0-9_.:-]/g, "")
+    .replace(/[^a-zA-Z0-9_.:@&/-]/g, "")
     .toLowerCase()
     .slice(0, 40);
+}
+
+function normalizeProjectColorId(value) {
+  return projectColorPalette.some((color) => color.id === value) ? value : "";
+}
+
+function projectColorById(colorId) {
+  return projectColorPalette.find((color) => color.id === colorId) || null;
+}
+
+function projectColorIds() {
+  return projectColorPalette.map((color) => color.id);
+}
+
+function getProjectGroupKey(thread) {
+  const path = getProjectPath(thread);
+  return path || "Projectless";
+}
+
+function syncProjectColors(threadList = []) {
+  const activeKeys = new Set(threadList.map((thread) => getProjectGroupKey(thread)));
+  const nextColors = {};
+  for (const [projectKey, colorId] of Object.entries(state.projectColors)) {
+    if (!activeKeys.has(projectKey)) continue;
+    const normalizedColorId = normalizeProjectColorId(colorId);
+    if (normalizedColorId) nextColors[projectKey] = normalizedColorId;
+  }
+  if (Object.keys(nextColors).length === Object.keys(state.projectColors).length && Object.keys(nextColors).every((projectKey) => nextColors[projectKey] === state.projectColors[projectKey])) {
+    return false;
+  }
+  state.projectColors = nextColors;
+  return true;
+}
+
+function ensureProjectColorAssignments(groups) {
+  let dirty = false;
+  const availableColors = projectColorIds();
+  const usedColors = new Set();
+
+  for (const [projectKey, colorId] of Object.entries(state.projectColors)) {
+    usedColors.add(normalizeProjectColorId(colorId));
+  }
+
+  for (const group of groups) {
+    if (!group.projectKey) continue;
+    const assigned = normalizeProjectColorId(state.projectColors[group.projectKey]);
+    if (assigned) {
+      state.projectColors[group.projectKey] = assigned;
+      usedColors.add(assigned);
+    } else {
+      const candidates = availableColors.filter((colorId) => !usedColors.has(colorId));
+      const chosen = candidates.length
+        ? candidates[Math.floor(Math.random() * candidates.length)]
+        : availableColors[Math.floor(Math.random() * availableColors.length)];
+      state.projectColors[group.projectKey] = chosen;
+      usedColors.add(chosen);
+      dirty = true;
+    }
+    group.colorId = state.projectColors[group.projectKey];
+  }
+
+  return dirty;
 }
 
 function escapeHtml(value) {
@@ -329,7 +409,7 @@ function getThreadTags(thread, includeChildren = false) {
 }
 
 function getDisplayTitle(thread) {
-  if (thread.threadSource !== "subagent") return thread.name;
+  if (thread.threadSource !== "subagent") return thread.title || thread.name;
   return getParentThread(thread)?.name || "Subagent";
 }
 
@@ -358,6 +438,18 @@ function getProjectName(thread) {
   const pathValue = getProjectPath(thread);
   const parts = String(pathValue).split(/[\\/]/).filter(Boolean);
   return parts.at(-1) || "";
+}
+
+function setProjectColor(projectKey, colorId) {
+  const normalizedColorId = normalizeProjectColorId(colorId);
+  const nextColors = { ...state.projectColors };
+
+  if (!projectKey) return;
+  if (!normalizedColorId) delete nextColors[projectKey];
+  else nextColors[projectKey] = normalizedColorId;
+
+  state.projectColors = nextColors;
+  savePreferences();
 }
 
 function getPromptText(thread) {
@@ -482,6 +574,10 @@ function makeCardMeta(iconName, value, options = {}) {
   else item.append(makeIcon(iconName));
   const text = document.createElement("span");
   text.textContent = value || "-";
+  if (options.tooltip !== null && options.tooltip !== undefined && text.textContent !== "-") {
+    text.title = options.tooltip;
+    text.setAttribute("aria-label", options.tooltip);
+  }
   item.append(text);
   return item;
 }
@@ -521,47 +617,14 @@ function renderStatusFilters() {
 function renderQuickFilters() {
   quickFilters.replaceChildren();
   for (const filter of quickFilterDefs) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = filter.label;
-    button.title = filter.tip;
-    button.setAttribute("aria-pressed", String(state.quickFilter === filter.id));
-    button.addEventListener("click", () => {
-      state.quickFilter = filter.id;
-      savePreferences();
-      render();
-    });
-    quickFilters.append(button);
+    const option = document.createElement("option");
+    option.value = filter.id;
+    option.textContent = filter.label;
+    option.title = filter.tip;
+    option.selected = state.quickFilter === filter.id;
+    quickFilters.append(option);
   }
-}
-
-function renderViewModes() {
-  viewModes.replaceChildren();
-  for (const mode of viewModeDefs) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = mode.label;
-    button.title = mode.tip;
-    button.setAttribute("aria-pressed", String(state.viewMode === mode.id));
-    button.addEventListener("click", () => {
-      state.viewMode = mode.id;
-      savePreferences();
-      render();
-    });
-    viewModes.append(button);
-  }
-}
-
-function renderSortTiers() {
-  const mode = sortModeDefs[state.sortMode] || sortModeDefs.priority;
-  sortTiers.replaceChildren();
-  sortTiers.title = `${mode.label}: ${mode.tiers.join(" > ")}`;
-
-  for (const [index, tier] of mode.tiers.entries()) {
-    const chip = document.createElement("span");
-    chip.textContent = index === 0 ? tier : `> ${tier}`;
-    sortTiers.append(chip);
-  }
+  quickFilters.value = state.quickFilter;
 }
 
 function getTagCounts() {
@@ -630,10 +693,9 @@ function renderCard(thread) {
   const metadata = card.querySelector(".card-metadata");
   const lastTool = card.querySelector(".last-tool");
   const tokensUsed = card.querySelector(".tokens-used");
-  const openButton = card.querySelector(".card-open");
-  const copyButton = card.querySelector(".card-copy");
-  title.textContent = getDisplayTitle(thread);
-  title.title = thread.threadSource === "subagent" ? `Parent: ${getDisplayTitle(thread)}\nSubagent task: ${thread.name}` : thread.name;
+  const cardTitle = getDisplayTitle(thread);
+  title.textContent = cardTitle;
+  title.title = thread.threadSource === "subagent" ? `Parent: ${cardTitle}\nSubagent task: ${thread.name}` : cardTitle;
   statusText.textContent = displayStatus;
   prompt.textContent = getPromptText(thread);
   prompt.title = getOriginalTask(thread);
@@ -644,23 +706,20 @@ function renderCard(thread) {
     unreadIndicator.title = thread.unread ? "Unread thread" : `${stats.unread} unread subagent${stats.unread === 1 ? "" : "s"}`;
   }
 
+  const modelLabel = thread.model || thread.providerLabel || thread.provider || "unknown";
   metadata.append(
-    makeCardMeta("bot", thread.model || thread.providerLabel || thread.provider || "unknown", { providerBadge: thread }),
-    makeCardMeta("branch", thread.gitBranch || getDisplaySubtitle(thread)),
-    makeCardMeta("shield", thread.permissionMode || thread.approvalPolicy || "unknown", { tone: thread.fullAccess ? "danger" : "" })
+    makeCardMeta("bot", modelLabel, { providerBadge: thread, tooltip: modelLabel }),
+    makeCardMeta("branch", thread.gitBranch || getDisplaySubtitle(thread), { tooltip: thread.gitBranch || getDisplaySubtitle(thread) })
   );
+  if ((thread.permissionMode || "").toLowerCase() === "danger-full-access") {
+    metadata.append(makeCardMeta("shield", "full access", { tone: "danger" }));
+  }
   lastTool.textContent = thread.lastToolName || "-";
-  tokensUsed.textContent = formatCompactNumber((thread.tokensUsed || 0) + stats.tokens);
-  const openLabel = document.createElement("span");
-  openLabel.textContent = thread.openLabel || "Open";
-  openButton.append(makeIcon("external"), openLabel);
-  copyButton.append(makeIcon("copy"));
-  openButton.title = thread.openLabel || "Open thread";
-  copyButton.addEventListener("click", async () => {
-    await navigator.clipboard.writeText(threadOpenUrl(thread));
-  });
-  openButton.addEventListener("click", () => openThreadInCodex(thread));
-
+  const tokenCount = (thread.tokensUsed || 0) + (stats.tokens || 0);
+  tokensUsed.textContent = formatCompactNumber(tokenCount);
+  const tokenCountLabel = Intl.NumberFormat().format(tokenCount);
+  tokensUsed.title = `${tokenCountLabel} tokens`;
+  tokensUsed.setAttribute("aria-label", `${tokenCountLabel} tokens`);
   const badges = card.querySelector(".badges");
   if (thread.goal?.status === "active" || stats.activeGoals) badges.append(makeBadge(stats.activeGoals > 1 ? `${stats.activeGoals} active goals` : "goal active", "process"));
   for (const tag of getThreadTags(thread, false)) badges.append(makeBadge(tag, "tag"));
@@ -717,7 +776,11 @@ function getBoardThreads() {
   const query = normalize(state.query.trim());
   const showSubagents = state.quickFilter === "subagents" || Boolean(query);
   const base = state.threads
-    .filter((thread) => showSubagents || thread.threadSource !== "subagent" || !getParentThread(thread))
+    .filter((thread) => !thread.archived)
+    .filter((thread) => {
+      if (thread.threadSource === "subagent" && !getParentThread(thread)) return false;
+      return showSubagents || thread.threadSource !== "subagent" || !getParentThread(thread);
+    })
     .map((thread) => ({ ...thread, displayStatus: getEffectiveStatus(thread) }));
 
   return sortThreads(base.filter((thread) => {
@@ -833,16 +896,10 @@ function sortThreads(threads) {
   });
 }
 
-function renderMetrics() {
-  const summary = state.summary || { counts: {}, total: 0, unread: 0 };
-  document.querySelector("#runningThreads").textContent = summary.counts?.running || 0;
-  document.querySelector("#completeThreads").textContent = summary.counts?.complete || 0;
-  document.querySelector("#recentThreads").textContent = summary.counts?.recent || 0;
-  document.querySelector("#todayThreads").textContent = summary.counts?.today || 0;
-  document.querySelector("#doneThreads").textContent = summary.counts?.done || 0;
-  document.querySelector("#unreadThreads").textContent = summary.unread || 0;
-  document.querySelector("#riskThreads").textContent = (summary.liveFullAccess || 0) + (summary.staleRunning || 0) + (summary.logErrors24h || 0);
-  document.querySelector("#updatedAt").textContent = state.lastSnapshotAt ? `Updated ${formatClock(state.lastSnapshotAt)}` : "--";
+function renderUpdatedAt() {
+  const updatedAt = document.querySelector("#updatedAt");
+  if (!updatedAt) return;
+  updatedAt.textContent = state.lastSnapshotAt ? `Updated ${formatClock(state.lastSnapshotAt)}` : "--";
 }
 
 function usageLimitLabel(window) {
@@ -852,24 +909,41 @@ function usageLimitLabel(window) {
   return `${window.label || "Usage"} usage limit`;
 }
 
-function usageShortLabel(window) {
-  if (!window) return "Usage";
-  if (window.windowMinutes <= 360) return `${Math.round(window.windowMinutes / 60)}h`;
-  if (window.windowMinutes >= 7 * 24 * 60) return "Weekly";
-  return window.label || "Usage";
+function normalizeUsageLimitName(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return "Usage";
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function usageGroupLabel(window) {
+  if (!window?.limitId) return "Usage limits";
+  if (window.limitId === "codex") return "General usage limits";
+  const explicit = window.limitName || "";
+  const base = explicit.trim() || normalizeUsageLimitName(window.limitId);
+  return `${base} usage limits`;
 }
 
 function usageShortResetText(window) {
-  if (window?.resetInMs == null) return "reset --";
-  return `reset ${formatDurationMs(window.resetInMs)}`;
+  if (!window?.resetsAt) return "Resets --";
+  const resetAt = new Date(window.resetsAt);
+  if (Number.isNaN(resetAt.getTime())) return "Resets --";
+  if (window.windowMinutes <= 360) {
+    return `Resets ${resetAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+  }
+  return `Resets ${resetAt.toLocaleDateString([], { month: "short", day: "numeric" })}`;
 }
 
 function renderUsageDetailWindow(window) {
   if (!window) return "";
   const usedPercent = Math.max(0, Math.min(100, window.usedPercent));
   const remaining = formatPercent(window.remainingPercent);
-  const label = usageShortLabel(window);
-  const title = `${usageLimitLabel(window)}. ${remaining} left. ${usageShortResetText(window)}.`;
+  const label = usageLimitLabel(window);
+  const resetText = usageShortResetText(window);
+  const title = `${usageGroupLabel(window)}. ${usageLimitLabel(window)}. ${remaining} left. ${resetText}.`;
 
   return `
     <article class="usage-detail-row" title="${escapeHtml(title)}">
@@ -878,21 +952,53 @@ function renderUsageDetailWindow(window) {
         <span>${escapeHtml(remaining)} left</span>
       </div>
       <div class="usage-bar" aria-hidden="true"><span style="width: ${usedPercent}%"></span></div>
-      <p>${escapeHtml(usageShortResetText(window))}</p>
+      <p>${escapeHtml(resetText)}</p>
     </article>
   `;
 }
 
 function renderUsage() {
+  if (!usageDetail) return;
   const usage = state.usage;
   if (!usage?.available) {
     usageDetail.hidden = true;
     return;
   }
 
-  const detailRows = [renderUsageDetailWindow(usage.primary), renderUsageDetailWindow(usage.secondary)].filter(Boolean).join("");
-  usageDetail.hidden = !detailRows;
-  usageDetail.innerHTML = detailRows;
+  const groupOrder = [];
+  const grouped = new Map();
+  const seen = new Set();
+  const addWindow = (window) => {
+    if (!window) return;
+    const key = window.groupKey || window.key || `${window.limitId || "codex"}:${window.label || ""}`;
+    if (key && seen.has(key)) return;
+    if (key) seen.add(key);
+    if (!key) return;
+    const groupName = usageGroupLabel(window);
+    if (!grouped.has(groupName)) {
+      grouped.set(groupName, []);
+      groupOrder.push(groupName);
+    }
+    grouped.get(groupName).push(window);
+  };
+
+  for (const window of usage.windows || []) addWindow(window);
+  addWindow(usage.primary);
+  addWindow(usage.secondary);
+
+  const detailRows = [];
+  for (const groupName of groupOrder) {
+    const windowRows = (grouped.get(groupName) || [])
+      .map((window) => renderUsageDetailWindow(window))
+      .filter(Boolean);
+    if (!windowRows.length) continue;
+    detailRows.push(`<p class="usage-group-title">${escapeHtml(groupName)}</p>`);
+    detailRows.push(windowRows.join(""));
+  }
+
+  const detailHtml = detailRows.join("");
+  usageDetail.hidden = !detailHtml;
+  usageDetail.innerHTML = detailHtml;
 }
 
 function renderUpdateNotice() {
@@ -956,6 +1062,29 @@ function closeWebhookModal() {
   openWebhookSettings.focus();
 }
 
+function openNewTagModal(threadId) {
+  const thread = getThreadById(threadId || menuThreadId);
+  if (!thread) return;
+
+  newTagForm.dataset.threadId = thread.id;
+  newTagInput.value = "";
+  newTagFeedback.textContent = "";
+  newTagModal.hidden = false;
+  document.body.classList.add("modal-open");
+  requestAnimationFrame(() => {
+    newTagInput.focus();
+    newTagInput.select();
+  });
+}
+
+function closeNewTagModal() {
+  newTagForm.removeAttribute("data-thread-id");
+  newTagInput.value = "";
+  newTagFeedback.textContent = "";
+  newTagModal.hidden = true;
+  document.body.classList.remove("modal-open");
+}
+
 function collectWebhookSettings() {
   const statuses = {};
   for (const status of webhookStatusIds) {
@@ -1012,52 +1141,72 @@ async function sendWebhookTest() {
 }
 
 function groupThreadsByRepeatedProject(threads) {
-  const counts = new Map();
+  const byProject = new Map();
   for (const thread of threads) {
-    const project = getProjectName(thread);
-    if (!project) continue;
-    counts.set(project, (counts.get(project) || 0) + 1);
-  }
-
-  const groupedProjects = new Set();
-  const groups = [];
-  for (const thread of threads) {
-    const project = getProjectName(thread);
-    if (!project || counts.get(project) < 2) {
-      groups.push({ type: "thread", thread });
-      continue;
+    const project = getProjectName(thread) || "Projectless";
+    const projectKey = getProjectGroupKey(thread);
+    if (!byProject.has(projectKey)) {
+      byProject.set(projectKey, {
+        type: "project",
+        project,
+        projectKey,
+        path: getProjectPath(thread),
+        threads: [],
+      });
     }
-
-    if (groupedProjects.has(project)) continue;
-    groupedProjects.add(project);
-    groups.push({
-      type: "project",
-      project,
-      path: getProjectPath(thread),
-      threads: threads.filter((candidate) => getProjectName(candidate) === project),
-    });
+    const group = byProject.get(projectKey);
+    group.project = project;
+    group.path = getProjectPath(thread);
+    group.threads.push(thread);
   }
-
+  const groups = Array.from(byProject.values());
+  if (ensureProjectColorAssignments(groups)) savePreferences();
   return groups;
 }
 
 function renderProjectGroup(group) {
   const section = document.createElement("section");
   section.className = "project-group";
+  const color = projectColorById(group.colorId);
+  section.style.setProperty("--project-group-bg", color?.background || "var(--surface-mid)");
+  section.style.setProperty("--project-group-border", color?.border || "var(--outline-strong)");
+  section.style.setProperty("--project-group-text", color?.text || "var(--muted)");
+  section.style.setProperty("--project-group-control", color?.background || "var(--surface-mid)");
 
   const header = document.createElement("header");
-  const titleWrap = document.createElement("div");
-  const label = document.createElement("span");
-  label.textContent = "Project";
-  const title = document.createElement("h3");
-  title.textContent = group.project;
-  title.title = group.path || group.project;
-  titleWrap.append(label, title);
+  const title = document.createElement("span");
+  title.className = "project-label";
+  const projectName = group.project || "Projectless";
+  title.textContent = `PROJECT: ${projectName}`;
+  title.title = group.path || projectName;
 
   const count = document.createElement("span");
   count.className = "project-count";
   count.textContent = String(group.threads.length);
-  header.append(titleWrap, count);
+
+  const colorPicker = document.createElement("select");
+  const autoOption = document.createElement("option");
+  autoOption.value = "";
+  autoOption.textContent = "Auto";
+  colorPicker.append(autoOption);
+
+  for (const color of projectColorPalette) {
+    const option = document.createElement("option");
+    option.value = color.id;
+    option.textContent = color.label;
+    colorPicker.append(option);
+  }
+  colorPicker.value = group.colorId || "";
+  colorPicker.className = "project-color-select";
+  colorPicker.title = `Assign color for ${projectName}`;
+  colorPicker.setAttribute("aria-label", `Assign color for ${projectName}`);
+  colorPicker.addEventListener("change", (event) => {
+    event.preventDefault();
+    setProjectColor(group.projectKey, colorPicker.value);
+    render();
+  });
+
+  header.append(title, colorPicker, count);
 
   const cards = document.createElement("div");
   cards.className = "project-cards";
@@ -1076,15 +1225,10 @@ function renderBoard(filtered) {
   }
 
   renderColumnSwitcher(filtered, visibleColumns);
-  board.className = state.viewMode === "list" ? "board monitor-list" : "board";
-  board.setAttribute("aria-label", state.viewMode === "list" ? "Agent thread monitor list" : "Agent thread board");
+  board.className = "board";
+  board.setAttribute("aria-label", "Agent thread board");
   board.dataset.columnCount = String(visibleColumns.length);
-  board.dataset.view = state.viewMode;
-
-  if (state.viewMode === "list") {
-    renderThreadList(filtered);
-    return;
-  }
+  board.dataset.view = "board";
 
   for (const column of visibleColumns) {
     const el = columnTemplate.content.firstElementChild.cloneNode(true);
@@ -1114,8 +1258,7 @@ function renderBoard(filtered) {
 
 function renderColumnSwitcher(filtered, visibleColumns) {
   columnSwitcher.replaceChildren();
-  columnSwitcher.hidden = state.viewMode !== "board";
-  if (columnSwitcher.hidden) return;
+  columnSwitcher.hidden = false;
 
   for (const column of visibleColumns) {
     const count = filtered.filter((thread) => thread.displayStatus === column.id).length;
@@ -1129,54 +1272,6 @@ function renderColumnSwitcher(filtered, visibleColumns) {
       render();
     });
     columnSwitcher.append(button);
-  }
-}
-
-function renderThreadList(filtered) {
-  const header = document.createElement("div");
-  header.className = "monitor-row monitor-header";
-  header.innerHTML = `
-    <span>Status</span>
-    <span>Thread</span>
-    <span>Activity</span>
-    <span>Reason</span>
-  `;
-  board.append(header);
-
-  if (!filtered.length) {
-    const empty = document.createElement("p");
-    empty.className = "empty";
-    empty.textContent = "No threads";
-    board.append(empty);
-    return;
-  }
-
-  for (const thread of filtered) {
-    const stats = childStats(thread);
-    const row = document.createElement("button");
-    row.type = "button";
-    row.className = "monitor-row";
-    row.dataset.status = thread.displayStatus;
-    row.addEventListener("click", () => showDetails(thread.id));
-
-    const riskItems = [
-      thread.fullAccess ? "full access" : null,
-      thread.liveProcessCount || stats.liveProcesses ? "terminal" : null,
-      thread.logHealth?.errors24h || stats.errors ? "errors" : null,
-      thread.logHealth?.warnings24h || stats.warnings ? "warnings" : null,
-      thread.runningStale ? "stale" : null,
-    ].filter(Boolean);
-
-    row.innerHTML = `
-      <span class="status-cell"><span class="badge ${escapeHtml(thread.displayStatus)}">${escapeHtml(thread.statusLabel || thread.displayStatus)}</span></span>
-      <span class="thread-cell">
-        <strong>${escapeHtml(getDisplayTitle(thread))}</strong>
-        <small>${escapeHtml(thread.id)}</small>
-      </span>
-      <span>${escapeHtml(formatRelative(thread.activityAt))}</span>
-      <span>${escapeHtml(riskItems.join(", ") || "-")}</span>
-    `;
-    board.append(row);
   }
 }
 
@@ -1438,28 +1533,19 @@ function showDetails(threadId) {
   document.body.classList.add("detail-open");
 }
 
-function focusTagEditor() {
-  const input = detailContent.querySelector("#tagEditor input[name='tag']");
-  if (!input) return;
-  input.focus();
-  input.select();
-  input.scrollIntoView({ block: "center", behavior: "smooth" });
-}
-
 function closeDetails() {
   detailDrawer.hidden = true;
   state.selectedThreadId = null;
   document.body.classList.remove("detail-open");
 }
 
-function getReadActionIds(thread, includeChildren = false) {
-  const ids = [thread.id];
-  if (includeChildren) ids.push(...getChildThreads(thread).map((child) => child.id));
+function getReadActionIds(thread) {
+  const ids = [thread.id, ...getChildThreads(thread).map((child) => child.id)];
   return Array.from(new Set(ids));
 }
 
-async function markRead(thread, includeChildren = false) {
-  const threadIds = getReadActionIds(thread, includeChildren);
+async function markRead(thread) {
+  const threadIds = getReadActionIds(thread);
   const response = await fetch("/api/threads/read", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -1479,6 +1565,20 @@ async function markRead(thread, includeChildren = false) {
       ? "The thread was marked unread again after refresh"
       : "No matching unread state was removed");
   }
+}
+
+async function archiveThread(thread) {
+  const response = await fetch(`/api/threads/${thread.id}/state`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ archived: true }),
+  });
+
+  if (!response.ok) throw new Error(`Archive failed: ${response.status}`);
+  const result = await response.json();
+  state.threads = state.threads.map((item) => (item.id === thread.id ? { ...item, archived: Boolean(result.archived) } : item));
+  render();
+  await loadThreads({ force: true });
 }
 
 async function updateThreadTags(threadId, tags) {
@@ -1550,8 +1650,8 @@ function showCardMenu(threadId, x, y) {
   const stats = childStats(thread);
   menuThreadId = threadId;
 
-  setMenuItemHidden("mark-read", !thread.unread);
-  setMenuItemHidden("mark-family-read", !(stats.total && (thread.unread || stats.unread)));
+  setMenuItemHidden("mark-read", !thread.unread && !stats.unread);
+  setMenuItemHidden("archive", thread.archived);
   renderTagSubmenu(thread);
   const tagsMenu = cardMenu.querySelector('[data-menu="tags"]');
   tagsMenu?.classList.remove("is-open", "align-left");
@@ -1595,8 +1695,7 @@ async function handleMenuAction(action, actionTarget = null) {
 
   if (action === "details") showDetails(thread.id);
   if (action === "new-tag") {
-    showDetails(thread.id);
-    requestAnimationFrame(focusTagEditor);
+    openNewTagModal(thread.id);
   }
   if (action === "toggle-tag") {
     if (!tag) return;
@@ -1609,8 +1708,8 @@ async function handleMenuAction(action, actionTarget = null) {
   if (action === "copy-id") await navigator.clipboard.writeText(thread.id);
   if (action === "copy-link") await navigator.clipboard.writeText(threadOpenUrl(thread));
   if (action === "copy-title") await navigator.clipboard.writeText(getDisplayTitle(thread));
-  if (action === "mark-read") await markRead(thread, false);
-  if (action === "mark-family-read") await markRead(thread, true);
+  if (action === "mark-read") await markRead(thread);
+  if (action === "archive") await archiveThread(thread);
 }
 
 function getPanelMaxWidth() {
@@ -1820,11 +1919,10 @@ function setTimelinePanelCollapsed(collapsed, persist = true) {
 function render() {
   renderStatusFilters();
   renderQuickFilters();
-  renderViewModes();
-  renderSortTiers();
+  renderUpdatedAt();
   renderTagFilters();
   const filtered = getBoardThreads();
-  renderMetrics();
+  if (syncProjectColors(state.threads)) savePreferences();
   renderUsage();
   renderUpdateNotice();
   renderBoard(filtered);
@@ -1909,10 +2007,38 @@ webhookForm.addEventListener("submit", (event) => {
     setWebhookFeedback(error.message);
   });
 });
+newTagForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const tag = normalizeTag(newTagInput.value);
+  if (!tag) {
+    newTagFeedback.textContent = "Tag cannot be empty after normalization.";
+    return;
+  }
+  const threadId = newTagForm.dataset.threadId;
+  const thread = getThreadById(threadId);
+  if (!thread) {
+    newTagFeedback.textContent = "No thread is selected.";
+    return;
+  }
+  const tags = Array.from(new Set([...getThreadTags(thread, false), tag]));
+  newTagFeedback.textContent = "Saving...";
+  updateThreadTags(thread.id, tags)
+    .then(() => {
+      closeNewTagModal();
+    })
+    .catch((error) => {
+      newTagFeedback.textContent = `Issue: ${error.message}`;
+    });
+});
 testWebhook.addEventListener("click", () => {
   sendWebhookTest().catch((error) => {
     setWebhookFeedback(error.message);
   });
+});
+closeNewTagModalButton?.addEventListener("click", closeNewTagModal);
+cancelNewTag?.addEventListener("click", closeNewTagModal);
+newTagModal.addEventListener("click", (event) => {
+  if (event.target === newTagModal) closeNewTagModal();
 });
 panelToggle.addEventListener("click", () => setPanelCollapsed(!state.panelCollapsed));
 timelinePanelToggle.addEventListener("click", () => setTimelinePanelCollapsed(!state.timelinePanelCollapsed));
@@ -1933,6 +2059,7 @@ document.addEventListener("keydown", (event) => {
   if (!cardMenu.hidden) closeCardMenu();
   if (!detailDrawer.hidden) closeDetails();
   if (!webhookModal.hidden) closeWebhookModal();
+  if (!newTagModal.hidden) closeNewTagModal();
 });
 
 focusMode.addEventListener("click", () => {
@@ -1953,18 +2080,18 @@ sortMode.addEventListener("change", () => {
   savePreferences();
   render();
 });
-
-setInterval(() => {
-  if (state.threads.length) renderMetrics();
-}, 1000);
+quickFilters.addEventListener("change", () => {
+  state.quickFilter = quickFilters.value;
+  savePreferences();
+  render();
+});
 
 initPanelResize();
 initTimelinePanelResize();
 restorePreferences();
 renderStatusFilters();
 renderQuickFilters();
-renderViewModes();
-renderSortTiers();
+renderUpdatedAt();
 connectEvents();
 checkForUpdates();
 loadWebhookSettings();

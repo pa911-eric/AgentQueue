@@ -26,41 +26,78 @@
       </header>
 
       <div class="panel-body">
-        <section class="panel-section metric-list" aria-label="Dashboard status">
-          <div class="panel-section-header">
-            <p class="eyebrow">State</p>
-            <span id="updatedAt">--</span>
-          </div>
-          <div class="metric-row metric-running"><span>Running</span><strong id="runningThreads">0</strong></div>
-          <div class="metric-row metric-unread"><span>Unread</span><strong id="unreadThreads">0</strong></div>
-          <div class="metric-row"><span>Recent</span><strong id="recentThreads">0</strong></div>
-          <div class="metric-row metric-risk"><span>Risk</span><strong id="riskThreads">0</strong></div>
-          <span id="completeThreads" hidden>0</span>
-          <span id="todayThreads" hidden>0</span>
-          <span id="doneThreads" hidden>0</span>
-        </section>
-
-        <section class="panel-section top-actions" aria-label="Dashboard actions">
+        <section class="panel-section control-cluster control-command" aria-label="Command rail">
           <div class="panel-section-header">
             <p class="eyebrow">Command</p>
+            <time id="updatedAt" class="panel-meta" datetime="">Updated --</time>
           </div>
-          <label class="search" title="Filter visible threads by title, prompt, project, agent, or id">
-            <span>Search</span>
-            <input id="search" type="search" placeholder="thread, project, prompt, id" autocomplete="off" />
-          </label>
-          <div class="command-actions">
-            <button id="focusMode" type="button" aria-pressed="false" title="Hide quiet older threads unless they need review">Focus</button>
-            <button id="refresh" type="button" title="Reload local agent thread data now">Refresh</button>
-            <a class="open-link" href="/api/docs" target="_blank" rel="noreferrer" title="Open local AgentQueue API documentation">API Docs</a>
+
+          <div class="control-stack">
+            <label class="search" title="Filter visible threads by title, prompt, project, agent, or id">
+              <span>Filter</span>
+              <input id="search" type="search" placeholder="thread id, project, prompt, or path" autocomplete="off" />
+            </label>
+
+            <div class="command-actions" role="group" aria-label="Global commands">
+              <button id="focusMode" type="button" aria-pressed="false" title="Hide quiet older threads unless they need review">Focus</button>
+              <button id="refresh" type="button" title="Reload local agent thread data now">Refresh</button>
+              <a class="open-link" href="/api/docs" target="_blank" rel="noreferrer" title="Open local AgentQueue API documentation">API Docs</a>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel-section control-cluster control-filters" aria-label="Board controls">
+          <div class="panel-section-header">
+            <p class="eyebrow">Board Controls</p>
+            <span class="panel-meta">Filters + sorting</span>
+          </div>
+
+          <div class="filter-matrix">
+            <div class="filter-block">
+              <p class="control-label">Sort</p>
+              <label class="select-wrap" title="Choose how threads are ordered">
+                <span>Mode</span>
+                <select id="sortMode">
+                  <option value="priority">Tiered priority</option>
+                  <option value="updated">Activity first</option>
+                  <option value="running">Longest running</option>
+                  <option value="risk">Risk first</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="filter-block">
+              <p class="control-label">Quick Filters</p>
+              <label class="select-wrap" title="Show focused subsets">
+                <span>Quick</span>
+                <select id="quickFilters"></select>
+              </label>
+            </div>
+
+            <div class="filter-block" id="tagFilterSection" hidden>
+              <p class="control-label">Tags</p>
+              <div id="tagFilters" class="tag-filters"></div>
+            </div>
+
+            <div class="filter-block">
+              <p class="control-label">Statuses</p>
+              <div id="statusFilters" class="segmented compact"></div>
+            </div>
+
+            <label class="toggle compact hide-done-toggle" title="Hide the Done column and older completed threads">
+              <input id="hideDone" type="checkbox" />
+              <span>Hide Done</span>
+            </label>
           </div>
         </section>
 
         <section id="updateNotice" class="panel-section update-notice" hidden aria-label="AgentQueue update">
-          <div>
+          <div class="panel-section-header">
             <p class="eyebrow">Update</p>
-            <strong id="updateTitle">Update available</strong>
-            <p id="updateDetail"></p>
+            <span class="panel-meta">Maintenance</span>
           </div>
+          <strong id="updateTitle">Update available</strong>
+          <p id="updateDetail"></p>
           <div class="update-actions">
             <a id="updateReleaseLink" class="open-link" href="#" target="_blank" rel="noreferrer">Release</a>
             <button id="copyUpdateCommand" type="button">Copy Command</button>
@@ -68,54 +105,17 @@
           </div>
         </section>
 
-        <section class="panel-section toolbar" aria-label="Board filters">
-          <div class="panel-section-header">
-            <p class="eyebrow">Board Controls</p>
-          </div>
-          <div class="sort-control">
-            <label class="select-wrap" title="Choose how cards are ordered inside columns">
-              <span>Sort</span>
-              <select id="sortMode">
-                <option value="priority">Tiered priority</option>
-                <option value="updated">Activity first</option>
-                <option value="running">Longest running</option>
-                <option value="risk">Risk first</option>
-              </select>
-            </label>
-            <div id="sortTiers" class="sort-tiers" aria-live="polite"></div>
-          </div>
-          <div class="toolbar-left">
-            <div>
-              <p class="eyebrow">View</p>
-              <div id="viewModes" class="segmented compact"></div>
-            </div>
-            <div>
-              <p class="eyebrow">Quick Filters</p>
-              <div id="quickFilters" class="segmented"></div>
-            </div>
-            <div id="tagFilterSection" hidden>
-              <p class="eyebrow">Tags</p>
-              <div id="tagFilters" class="tag-filters"></div>
-            </div>
-            <div>
-              <p class="eyebrow">Statuses</p>
-              <div id="statusFilters" class="segmented compact"></div>
-            </div>
-          </div>
-          <label class="toggle" title="Hide the Done column and older completed threads">
-            <input id="hideDone" type="checkbox" />
-            <span>Hide Done</span>
-          </label>
-        </section>
-
         <section id="usageDetail" class="panel-section usage-detail" hidden aria-label="Burndown detail"></section>
 
-        <section class="panel-section integration-strip" aria-label="Thread webhook">
-          <div>
+        <section class="panel-section control-cluster control-system" aria-label="Thread webhook">
+          <div class="panel-section-header">
             <p class="eyebrow">Webhook</p>
-            <strong id="webhookState">Disabled</strong>
+            <span class="panel-meta">Integration state</span>
           </div>
-          <button id="openWebhookSettings" type="button" title="Configure thread status webhooks">Configure</button>
+          <div class="integration-strip">
+            <p id="webhookState" class="control-system-state">Disabled</p>
+            <button id="openWebhookSettings" type="button" title="Configure thread status webhooks">Configure</button>
+          </div>
         </section>
       </div>
 
@@ -245,6 +245,30 @@
       </section>
     </div>
 
+    <div id="newTagModal" class="modal-backdrop" hidden>
+      <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="newTagModalTitle">
+        <header>
+          <div>
+            <p class="eyebrow">Tags</p>
+            <h2 id="newTagModalTitle">New Tag</h2>
+          </div>
+          <button id="closeNewTagModal" type="button" aria-label="Close new tag form">Close</button>
+        </header>
+
+        <form id="newTagForm" class="tag-modal-form">
+          <label class="field" title="Type the tag name and save">
+            <span>Tag</span>
+            <input id="newTagInput" type="text" name="tag" maxlength="40" autocomplete="off" />
+          </label>
+          <footer class="tag-modal-actions">
+            <button id="submitNewTag" type="submit">Add Tag</button>
+            <button id="cancelNewTag" type="button">Cancel</button>
+          </footer>
+          <p id="newTagFeedback" class="modal-feedback" aria-live="polite"></p>
+        </form>
+      </section>
+    </div>
+
     <template id="columnTemplate">
       <section class="column">
         <header>
@@ -285,10 +309,6 @@
             <strong class="tokens-used"></strong>
           </div>
         </div>
-        <div class="card-actions">
-          <button class="card-open" type="button"></button>
-          <button class="card-copy" type="button" aria-label="Copy thread link" title="Copy thread link"></button>
-        </div>
         <time hidden></time>
       </article>
     </template>
@@ -304,7 +324,7 @@
       </div>
       <button type="button" data-action="open" role="menuitem">Open Thread</button>
       <button type="button" data-action="mark-read" role="menuitem">Mark as Read</button>
-      <button type="button" data-action="mark-family-read" role="menuitem">Mark Thread + Subagents Read</button>
+      <button type="button" data-action="archive" role="menuitem">Archive</button>
       <hr />
       <button type="button" data-action="copy-id" role="menuitem">Copy ID</button>
       <button type="button" data-action="copy-link" role="menuitem">Copy Link</button>

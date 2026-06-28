@@ -388,11 +388,16 @@ test("AgentQueue API endpoints", async (t) => {
     assert.equal(state.json.pinned, true);
     assert.equal(state.json.projectless, true);
 
-    const invalid = await checkedRequest(server, `/api/threads/${threadId}/state`, {
+    const archived = await checkedRequest(server, `/api/threads/${threadId}/state`, {
       method: "PATCH",
       body: { archived: true },
     });
-    assert.equal(invalid.status, 400);
+    assert.equal(archived.status, 200);
+    assert.equal(archived.json.archived, true);
+
+    const archivedSnapshot = await checkedRequest(server, "/api/threads");
+    const archivedThread = archivedSnapshot.json.threads.find((item) => item.id === threadId);
+    assert.equal(archivedThread.archived, true);
   });
 
   await t.test("serves integration endpoints", async () => {
@@ -518,6 +523,15 @@ test("AgentQueue Claude Code provider", async (t) => {
 
     const localState = JSON.parse(await fs.readFile(path.join(fixture.claudeHome, "agentqueue-localstate.json"), "utf8"));
     assert.deepEqual(localState.pinned, [claudeThreadId]);
+    const archive = await checkedRequest(server, `/api/threads/${claudeThreadId}/state`, {
+      method: "PATCH",
+      body: { archived: true },
+    });
+    assert.equal(archive.status, 200);
+    assert.equal(archive.json.archived, true);
+
+    const archivedState = JSON.parse(await fs.readFile(path.join(fixture.claudeHome, "agentqueue-localstate.json"), "utf8"));
+    assert.deepEqual(archivedState.archived, [claudeThreadId]);
   });
 
   await t.test("reports Claude data sources", async () => {
