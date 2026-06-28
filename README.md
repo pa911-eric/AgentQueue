@@ -4,9 +4,18 @@
 
 <img width="1920" height="919" alt="image" src="https://github.com/user-attachments/assets/1c773dd8-aaa9-4eb7-86ad-9534dfd1c7a6" />
 
-A local, dependency-free queue and usage dashboard for Codex desktop power users.
+A local, dependency-free queue and usage dashboard for Codex and Claude Code power users.
 
-AgentQueue reads your local Codex state and gives you a live board of what is running, what just finished, what needs attention, and how quickly current usage limits are burning down.
+AgentQueue reads your local agent state and gives you a live board of what is running, what just finished, what needs attention, and how quickly current usage limits are burning down.
+
+## Supported agents
+
+AgentQueue auto-detects local agent runtimes and shows every detected source in one board:
+
+- **Codex** (OpenAI) — reads `~/.codex` SQLite inventory and session rollouts. Full feature set, including the usage-limit panel.
+- **Claude Code** (Anthropic) — reads `~/.claude/projects/**/*.jsonl` session transcripts. One transcript maps to one thread; status, activity, model, token totals, tools, git branch, and prompt history are derived from the transcript.
+
+Auto mode reads both Codex and Claude Code when both have local state. Force a single-runtime view with `AGENTQUEUE_PROVIDER=claude` or `AGENTQUEUE_PROVIDER=codex` (or `"provider"` in `.agentqueue.json`). See [Provider differences](#provider-differences) for what changes per runtime.
 
 ## Features
 
@@ -28,8 +37,8 @@ AgentQueue reads your local Codex state and gives you a live board of what is ru
 ## Requirements
 
 - Node.js 18 or newer.
-- Node.js 24 or newer is recommended because it can read Codex's local SQLite thread inventory through `node:sqlite`.
-- Codex desktop local state in the default Codex home directory.
+- Node.js 24 or newer is recommended for Codex because it can read Codex's local SQLite thread inventory through `node:sqlite`. Claude Code reads JSONL transcripts only and does not require SQLite.
+- Local agent state: Codex desktop state in the Codex home directory, and/or Claude Code state in `~/.claude`.
 
 ## Install Now
 
@@ -127,7 +136,7 @@ Run the doctor before filing an issue or after moving the project folder:
 npm run doctor
 ```
 
-The doctor checks Node.js, SQLite support, `CODEX_HOME`, Codex inventory files, session files, Git install state, and the latest GitHub release when the network is available.
+The doctor checks Node.js, the active data sources, Codex SQLite support when Codex is active, local session files, Git install state, and the latest GitHub release when the network is available.
 
 Run the endpoint test suite with:
 
@@ -147,13 +156,15 @@ AgentQueue exposes a local JSON API alongside the dashboard:
 - Writes: `PATCH /api/threads/{threadId}/tags`, `POST /api/threads/{threadId}/read`, `PATCH /api/threads/{threadId}/state`
 - Integrations: `GET /api/events`, `POST /api/threads/{threadId}/open`, `GET /api/processes`, `GET /api/usage`, `GET/PUT /api/webhook`, `POST /api/webhook/test`
 
-Writes are intentionally conservative. Tags are stored in AgentQueue's sidecar file, unread updates remove thread IDs from known Codex unread-state stores, and state writes are limited to supported global-state flags such as `pinned` and `projectless`.
+Writes are intentionally conservative and routed to the thread's owning provider. Tags are stored in AgentQueue's per-provider sidecar files, unread updates remove thread IDs from known Codex unread-state stores, and state writes are limited to supported flags such as `pinned` and `projectless`.
 
 ## Configuration
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `AGENTQUEUE_PROVIDER` | auto | Force a single data source: `codex` or `claude`. Auto mode reads every detected source. |
 | `CODEX_HOME` | `<home>/.codex` | Codex state directory to read. |
+| `CLAUDE_HOME` | `<home>/.claude` | Claude Code state directory to read (also accepts `CLAUDE_CONFIG_DIR`). |
 | `PORT` | `4173` | Starting localhost port. |
 | `AGENTQUEUE_RECENT_MINUTES` | `120` | `Recent` status window. |
 | `AGENTQUEUE_COMPLETE_MINUTES` | `10` | `Complete` status window. |
@@ -210,28 +221,36 @@ Live terminal processes are shown as badges so a completed thread with a server 
 
 ## Data Sources
 
-The dashboard reads local files only:
+The dashboard reads local files only.
 
-- `%CODEX_HOME%\state_5.sqlite`
-- `%CODEX_HOME%\goals_1.sqlite`
-- `%CODEX_HOME%\session_index.jsonl`
-- `%CODEX_HOME%\.codex-global-state.json`
-- `%CODEX_HOME%\agentqueue-tags.json`
-- `%CODEX_HOME%\agentqueue-webhooks.json`
-- `%CODEX_HOME%\process_manager\chat_processes.json`
-- `%CODEX_HOME%\sessions\**\*.jsonl`
+**Codex (`CODEX_HOME`, default `~/.codex`):**
 
-Usage metrics come from local `token_count` events in session JSONL files. If those events are not available, the usage panel stays hidden.
+- `state_5.sqlite`, `goals_1.sqlite`, `logs_2.sqlite`
+- `session_index.jsonl`
+- `.codex-global-state.json`
+- `process_manager/chat_processes.json`
+- `sessions/**/*.jsonl`
 
-Custom tags are stored in AgentQueue's own `%CODEX_HOME%\agentqueue-tags.json` sidecar file. AgentQueue does not write tags into Codex session JSONL files, the session index, or Codex SQLite databases.
+**Claude Code (`CLAUDE_HOME`, default `~/.claude`):**
 
-Webhook settings are stored in AgentQueue's own `%CODEX_HOME%\agentqueue-webhooks.json` sidecar file. Webhook delivery is opt-in and user-initiated from the dashboard or local config.
+- `projects/**/*.jsonl` — one session transcript per thread
 
-If `CODEX_HOME` is not set, the app uses your platform home directory's `.codex` folder.
+Custom tags are stored in AgentQueue's own sidecar files next to each runtime's state (`agentqueue-tags.json`). Webhook settings use the active AgentQueue sidecar (`agentqueue-webhooks.json`); in mixed mode the default Codex-side sidecar drives notifications for the combined board. For Claude Code, pin/projectless flags are stored in a local `agentqueue-localstate.json` sidecar. AgentQueue never writes into the agent's own session files, indexes, or databases.
+
+Webhook delivery is opt-in and user-initiated from the dashboard or local config.
+
+### Provider differences
+
+Claude Code's local state does not include everything Codex exposes, so a few fields behave differently for Claude Code threads, including in the mixed Codex + Claude board:
+
+- **Usage limits:** Codex-derived when Codex is active, hidden for Claude-only mode. Claude Code transcripts record per-message token usage but not rate-limit windows. Per-thread token totals (input + output + cache-creation) are still shown.
+- **Unread state:** not tracked by Claude Code, so the unread filter is always empty and "mark read" is a no-op.
+- **Subagents, goals, live processes, log health:** Codex-only; these counts are zero for Claude Code.
+- **Open thread:** Codex uses its `codex://` deep link; Claude Code opens the local session transcript file instead.
 
 ## Privacy
 
-This project does not send your Codex state anywhere. It serves a local dashboard from your machine and reads local Codex files at request time.
+This project does not send your agent state anywhere. It serves a local dashboard from your machine and reads local agent files at request time.
 
 Be thoughtful before screenshots or screen shares: thread titles, prompts, workspace paths, and metadata may contain sensitive project context.
 
