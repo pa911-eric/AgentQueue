@@ -10,12 +10,12 @@ AgentQueue reads your local agent state and gives you a live board of what is ru
 
 ## Supported agents
 
-AgentQueue auto-detects which agent runtime's local state to read:
+AgentQueue auto-detects local agent runtimes and shows every detected source in one board:
 
 - **Codex** (OpenAI) — reads `~/.codex` SQLite inventory and session rollouts. Full feature set, including the usage-limit panel.
 - **Claude Code** (Anthropic) — reads `~/.claude/projects/**/*.jsonl` session transcripts. One transcript maps to one thread; status, activity, model, token totals, tools, git branch, and prompt history are derived from the transcript.
 
-Detection prefers whichever runtime has local state present. Force a specific runtime with `AGENTQUEUE_PROVIDER=claude` or `AGENTQUEUE_PROVIDER=codex` (or `"provider"` in `.agentqueue.json`). See [Provider differences](#provider-differences) for what changes per runtime.
+Auto mode reads both Codex and Claude Code when both have local state. Force a single-runtime view with `AGENTQUEUE_PROVIDER=claude` or `AGENTQUEUE_PROVIDER=codex` (or `"provider"` in `.agentqueue.json`). See [Provider differences](#provider-differences) for what changes per runtime.
 
 ## Features
 
@@ -136,7 +136,7 @@ Run the doctor before filing an issue or after moving the project folder:
 npm run doctor
 ```
 
-The doctor checks Node.js, SQLite support, `CODEX_HOME`, Codex inventory files, session files, Git install state, and the latest GitHub release when the network is available.
+The doctor checks Node.js, the active data sources, Codex SQLite support when Codex is active, local session files, Git install state, and the latest GitHub release when the network is available.
 
 Run the endpoint test suite with:
 
@@ -156,13 +156,13 @@ AgentQueue exposes a local JSON API alongside the dashboard:
 - Writes: `PATCH /api/threads/{threadId}/tags`, `POST /api/threads/{threadId}/read`, `PATCH /api/threads/{threadId}/state`
 - Integrations: `GET /api/events`, `POST /api/threads/{threadId}/open`, `GET /api/processes`, `GET /api/usage`, `GET/PUT /api/webhook`, `POST /api/webhook/test`
 
-Writes are intentionally conservative. Tags are stored in AgentQueue's sidecar file, unread updates remove thread IDs from known Codex unread-state stores, and state writes are limited to supported global-state flags such as `pinned` and `projectless`.
+Writes are intentionally conservative and routed to the thread's owning provider. Tags are stored in AgentQueue's per-provider sidecar files, unread updates remove thread IDs from known Codex unread-state stores, and state writes are limited to supported flags such as `pinned` and `projectless`.
 
 ## Configuration
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AGENTQUEUE_PROVIDER` | auto | Force the data source: `codex` or `claude`. Auto-detected when unset. |
+| `AGENTQUEUE_PROVIDER` | auto | Force a single data source: `codex` or `claude`. Auto mode reads every detected source. |
 | `CODEX_HOME` | `<home>/.codex` | Codex state directory to read. |
 | `CLAUDE_HOME` | `<home>/.claude` | Claude Code state directory to read (also accepts `CLAUDE_CONFIG_DIR`). |
 | `PORT` | `4173` | Starting localhost port. |
@@ -235,15 +235,15 @@ The dashboard reads local files only.
 
 - `projects/**/*.jsonl` — one session transcript per thread
 
-Custom tags and webhook settings are stored in AgentQueue's own sidecar files next to whichever runtime's state it reads (`agentqueue-tags.json`, `agentqueue-webhooks.json`). For Claude Code, pin/projectless flags are stored in a local `agentqueue-localstate.json` sidecar. AgentQueue never writes into the agent's own session files, indexes, or databases.
+Custom tags are stored in AgentQueue's own sidecar files next to each runtime's state (`agentqueue-tags.json`). Webhook settings use the active AgentQueue sidecar (`agentqueue-webhooks.json`); in mixed mode the default Codex-side sidecar drives notifications for the combined board. For Claude Code, pin/projectless flags are stored in a local `agentqueue-localstate.json` sidecar. AgentQueue never writes into the agent's own session files, indexes, or databases.
 
 Webhook delivery is opt-in and user-initiated from the dashboard or local config.
 
 ### Provider differences
 
-Claude Code's local state does not include everything Codex exposes, so a few panels behave differently when AgentQueue reads Claude Code:
+Claude Code's local state does not include everything Codex exposes, so a few fields behave differently for Claude Code threads, including in the mixed Codex + Claude board:
 
-- **Usage limits:** hidden. Claude Code transcripts record per-message token usage but not rate-limit windows, so the burndown panel stays hidden. Per-thread token totals (input + output + cache-creation) are still shown.
+- **Usage limits:** Codex-derived when Codex is active, hidden for Claude-only mode. Claude Code transcripts record per-message token usage but not rate-limit windows. Per-thread token totals (input + output + cache-creation) are still shown.
 - **Unread state:** not tracked by Claude Code, so the unread filter is always empty and "mark read" is a no-op.
 - **Subagents, goals, live processes, log health:** Codex-only; these counts are zero for Claude Code.
 - **Open thread:** Codex uses its `codex://` deep link; Claude Code opens the local session transcript file instead.

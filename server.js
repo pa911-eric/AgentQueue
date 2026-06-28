@@ -42,33 +42,39 @@ const logsDbPath = path.join(codexHome, "logs_2.sqlite");
 // Claude Code (Anthropic) local state locations.
 const claudeProjectsRoot = path.join(claudeHome, "projects");
 
-// AgentQueue can read either Codex's local state or Claude Code's local state.
-// The runtime is auto-detected from what exists on disk; override with
-// AGENTQUEUE_PROVIDER=claude|codex (or "provider" in .agentqueue.json).
-function detectProvider() {
-  const explicit = String(process.env.AGENTQUEUE_PROVIDER || projectConfig.provider || "").trim().toLowerCase();
-  if (explicit === "claude" || explicit === "codex") return explicit;
-  // An explicitly-set home for exactly one runtime is a strong signal.
-  if (process.env.CODEX_HOME && !process.env.CLAUDE_HOME) return "codex";
-  if (process.env.CLAUDE_HOME && !process.env.CODEX_HOME) return "claude";
-  const codexPresent = fsSync.existsSync(stateDbPath)
+function codexStatePresent() {
+  return fsSync.existsSync(stateDbPath)
     || candidateIndexPaths.some((filePath) => fsSync.existsSync(filePath))
     || fsSync.existsSync(sessionsRoot);
-  const claudePresent = fsSync.existsSync(claudeProjectsRoot);
-  if (claudePresent && !codexPresent) return "claude";
-  if (codexPresent && !claudePresent) return "codex";
-  // Both present (ambiguous) or neither: preserve AgentQueue's original Codex default.
-  return claudePresent && !codexPresent ? "claude" : "codex";
 }
-const provider = detectProvider();
-const isClaude = provider === "claude";
-const providerLabel = isClaude ? "Claude Code" : "Codex";
 
-// AgentQueue keeps its own sidecar files next to whichever runtime's state it reads.
-const dataHome = isClaude ? claudeHome : codexHome;
+function claudeStatePresent() {
+  return fsSync.existsSync(claudeProjectsRoot);
+}
+
+// Auto mode reads every local runtime with state. Override with
+// AGENTQUEUE_PROVIDER=claude|codex (or "provider" in .agentqueue.json).
+function detectProviders() {
+  const explicit = String(process.env.AGENTQUEUE_PROVIDER || projectConfig.provider || "").trim().toLowerCase();
+  if (explicit === "claude" || explicit === "codex") return [explicit];
+  const detected = [];
+  if (codexStatePresent()) detected.push("codex");
+  if (claudeStatePresent()) detected.push("claude");
+  return detected.length ? detected : ["codex"];
+}
+const activeProviders = detectProviders();
+const provider = activeProviders.length > 1 ? "mixed" : activeProviders[0];
+const providerLabel = provider === "mixed" ? "Codex + Claude Code" : (provider === "claude" ? "Claude Code" : "Codex");
+const providerLabels = { codex: "Codex", claude: "Claude Code", mixed: "Codex + Claude Code" };
+
+// AgentQueue keeps sidecar files next to each runtime's state.
+const dataHome = provider === "claude" ? claudeHome : codexHome;
+const codexTagsPath = path.join(codexHome, "agentqueue-tags.json");
+const claudeTagsPath = path.join(claudeHome, "agentqueue-tags.json");
 const tagsPath = path.join(dataHome, "agentqueue-tags.json");
 const webhooksPath = path.join(dataHome, "agentqueue-webhooks.json");
-const localStatePath = path.join(dataHome, "agentqueue-localstate.json");
+const claudeLocalStatePath = path.join(claudeHome, "agentqueue-localstate.json");
+const localStatePath = claudeLocalStatePath;
 function minutesFromEnv(name, fallback, legacyName = null) {
   const value = Number(process.env[name] ?? (legacyName ? process.env[legacyName] : undefined));
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -574,8 +580,8 @@ function cleanTags(tags) {
   )).slice(0, 12);
 }
 
-async function readThreadTags() {
-  const raw = await readJsonFile(tagsPath, {});
+async function readThreadTags(filePath = tagsPath) {
+  const raw = await readJsonFile(filePath, {});
   const source = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
   const tagsByThread = {};
 
@@ -588,20 +594,22 @@ async function readThreadTags() {
   return tagsByThread;
 }
 
-async function writeThreadTags(tagsByThread) {
-  await writeJsonFileAtomic(tagsPath, tagsByThread);
+async function writeThreadTags(tagsByThread, filePath = tagsPath) {
+  await writeJsonFileAtomic(filePath, tagsByThread);
 }
 
-async function setThreadTags(threadId, tags) {
+async function setThreadTags(threadId, tags, sourceProvider = null) {
   if (typeof threadId !== "string" || !/^[0-9a-f-]{36}$/i.test(threadId)) {
     throw new Error("Invalid thread id");
   }
 
-  const tagsByThread = await readThreadTags();
+  const targetProvider = sourceProvider || await getThreadProvider(threadId) || provider;
+  const filePath = targetProvider === "claude" ? claudeTagsPath : codexTagsPath;
+  const tagsByThread = await readThreadTags(filePath);
   const clean = cleanTags(tags);
   if (clean.length) tagsByThread[threadId] = clean;
   else delete tagsByThread[threadId];
-  await writeThreadTags(tagsByThread);
+  await writeThreadTags(tagsByThread, filePath);
   return { threadId, tags: clean };
 }
 
@@ -869,7 +877,7 @@ function buildUsageWindow(label, latest, snapshots) {
 }
 
 async function readUsageMetrics() {
-  if (isClaude) {
+  if (!activeProviders.includes("codex")) {
     return {
       available: false,
       refreshedAt: new Date().toISOString(),
@@ -1195,7 +1203,7 @@ function writeThreadFlag(state, atomState, storeName, threadId, enabled) {
   return nextStore.includes(threadId);
 }
 
-async function setThreadState(threadId, updates) {
+async function setThreadState(threadId, updates, sourceProvider = null) {
   if (!isThreadId(threadId)) throw new Error("Invalid thread id");
   if (!updates || typeof updates !== "object" || Array.isArray(updates)) throw new Error("Request body must be an object");
 
@@ -1208,7 +1216,8 @@ async function setThreadState(threadId, updates) {
   }
   if (Object.keys(next).length === 0) throw new Error("No supported state fields provided");
 
-  if (isClaude) {
+  const targetProvider = sourceProvider || await getThreadProvider(threadId) || provider;
+  if (targetProvider === "claude") {
     // Claude Code has no global UI-state store, so pins/projectless live in
     // AgentQueue's own non-destructive sidecar.
     const localState = await readLocalState();
@@ -1241,7 +1250,7 @@ async function setThreadState(threadId, updates) {
   return result;
 }
 
-async function markThreadsRead(threadIds) {
+async function markThreadsRead(threadIds, sourceProvider = null) {
   const ids = new Set(
     (Array.isArray(threadIds) ? threadIds : [])
       .filter(isThreadId)
@@ -1249,8 +1258,12 @@ async function markThreadsRead(threadIds) {
 
   if (ids.size === 0) return { markedIds: [], removed: 0 };
 
+  const codexIds = sourceProvider
+    ? (sourceProvider === "codex" ? ids : new Set())
+    : await filterThreadIdsByProvider(ids, "codex");
+
   // Claude Code does not track per-thread unread state, so there is nothing to clear.
-  if (isClaude) return { markedIds: Array.from(ids), removed: 0 };
+  if (codexIds.size === 0) return { markedIds: Array.from(ids), removed: 0 };
 
   const state = await readJsonFile(globalStatePath, {});
   const atomStateWasString = typeof state["electron-persisted-atom-state"] === "string";
@@ -1263,8 +1276,8 @@ async function markThreadsRead(threadIds) {
     "thread-unread-state-by-host-v1",
     "thread-unread-state",
   ]) {
-    removed += removeUnreadIdsFromStore(state[storeName], ids);
-    removed += removeUnreadIdsFromStore(atomState[storeName], ids);
+    removed += removeUnreadIdsFromStore(state[storeName], codexIds);
+    removed += removeUnreadIdsFromStore(atomState[storeName], codexIds);
   }
 
   if (removed > 0) {
@@ -1306,6 +1319,7 @@ function toLocalDateKey(value) {
 
 function enrichThread(thread, context) {
   const { state, sessionFilesById, processRowsByThread, spawnEdges, goals, logHealth, tagsByThread } = context;
+  const threadProvider = context.provider || "codex";
   const atomState = getPersistedAtomState(state);
   const permissionsById = state["heartbeat-thread-permissions-by-id"] || atomState["heartbeat-thread-permissions-by-id"] || {};
   const pinnedIds = new Set(state["pinned-thread-ids"] || atomState["pinned-thread-ids"] || []);
@@ -1334,7 +1348,7 @@ function enrichThread(thread, context) {
   const workspace = thread.cwd || workspaceHints[thread.id] || null;
   const outputDirectory = outputDirs[thread.id] || null;
   const sessionFilePath = thread.rolloutPath || sessionFilesById.get(thread.id) || null;
-  const deepLink = isClaude
+  const deepLink = threadProvider === "claude"
     ? (sessionFilePath ? pathToFileURL(sessionFilePath).href : "")
     : `codex://threads/${thread.id}`;
 
@@ -1389,8 +1403,9 @@ function enrichThread(thread, context) {
     tags: tagsByThread[thread.id] || [],
     codexUrl: deepLink,
     openUrl: deepLink,
-    openLabel: isClaude ? "Open transcript" : "Open in Codex",
-    provider,
+    openLabel: threadProvider === "claude" ? "Open transcript" : "Open in Codex",
+    provider: threadProvider,
+    providerLabel: providerLabels[threadProvider] || threadProvider,
     parseError: thread.parse_error || null,
   };
 }
@@ -1657,7 +1672,7 @@ function truncate(value, max) {
 async function loadClaudeThreads() {
   const exists = fsSync.existsSync(claudeProjectsRoot);
   const sessionFilesById = await getClaudeSessionFilesById();
-  const [tagsByThread, localState] = await Promise.all([readThreadTags(), readLocalState()]);
+  const [tagsByThread, localState] = await Promise.all([readThreadTags(claudeTagsPath), readLocalState()]);
 
   const sessionSummaries = new Map();
   const promptHistory = {};
@@ -1713,6 +1728,7 @@ async function loadClaudeThreads() {
     goals: new Map(),
     logHealth: new Map(),
     tagsByThread,
+    provider: "claude",
   };
 
   const threads = rawThreads
@@ -1725,8 +1741,8 @@ async function loadClaudeThreads() {
 
   const refreshedAt = new Date().toISOString();
   const snapshot = {
-    provider,
-    providerLabel,
+    provider: "claude",
+    providerLabel: providerLabels.claude,
     indexPath: null,
     stateDbPath: null,
     goalsDbPath: null,
@@ -1735,9 +1751,10 @@ async function loadClaudeThreads() {
     processManagerPath: null,
     localStatePath,
     sessionsRoot: claudeProjectsRoot,
-    codexHome: claudeHome,
+    codexHome,
     claudeHome,
-    dataHome,
+    dataHome: claudeHome,
+    tagsPath: claudeTagsPath,
     statusWindows,
     refreshedAt,
     summary: computeSummary(threads, refreshedAt),
@@ -1756,18 +1773,21 @@ async function loadClaudeThreads() {
   return snapshot;
 }
 
-async function loadThreads() {
-  if (isClaude) return loadClaudeThreads();
-
+async function loadCodexThreads() {
   const indexPath = await firstExistingPath(candidateIndexPaths);
   const sqliteThreads = readThreadsFromSqlite();
   if (!indexPath && sqliteThreads.length === 0) {
+    const refreshedAt = new Date().toISOString();
     return {
+      provider: "codex",
+      providerLabel: providerLabels.codex,
       indexPath: null,
       stateDbPath,
       codexHome,
       threads: [],
-      summary: computeSummary([], new Date().toISOString()),
+      summary: computeSummary([], refreshedAt),
+      usage: await readUsageMetrics(),
+      refreshedAt,
       error: `No session index found. Checked: ${candidateIndexPaths.join(", ")}`,
     };
   }
@@ -1777,7 +1797,7 @@ async function loadThreads() {
     readJsonFile(globalStatePath, {}),
     getSessionFilesById(),
     readProcessRows(),
-    readThreadTags(),
+    readThreadTags(codexTagsPath),
   ]);
 
   const threadsSource = sqliteThreads.length ? sqliteThreads : readThreadsFromIndex(indexText);
@@ -1792,7 +1812,7 @@ async function loadThreads() {
     sessionSummaries.set(id, await readSessionSummary(thread.rolloutPath || sessionFilesById.get(id)));
   }));
 
-  const context = { state, sessionFilesById, processRowsByThread, sessionSummaries, spawnEdges, goals, logHealth, tagsByThread };
+  const context = { state, sessionFilesById, processRowsByThread, sessionSummaries, spawnEdges, goals, logHealth, tagsByThread, provider: "codex" };
   const threads = Array.from(unique.values())
     .map((thread) => enrichThread(thread, context))
     .sort((a, b) => {
@@ -1803,8 +1823,8 @@ async function loadThreads() {
 
   const refreshedAt = new Date().toISOString();
   const snapshot = {
-    provider,
-    providerLabel,
+    provider: "codex",
+    providerLabel: providerLabels.codex,
     indexPath,
     stateDbPath: sqliteThreads.length ? stateDbPath : null,
     goalsDbPath: goals.size ? goalsDbPath : null,
@@ -1813,6 +1833,8 @@ async function loadThreads() {
     processManagerPath,
     sessionsRoot,
     codexHome,
+    dataHome: codexHome,
+    tagsPath: codexTagsPath,
     statusWindows,
     refreshedAt,
     summary: computeSummary(threads, refreshedAt),
@@ -1825,11 +1847,78 @@ async function loadThreads() {
   return snapshot;
 }
 
+async function loadThreads() {
+  const snapshots = await Promise.all(activeProviders.map((name) => (
+    name === "claude" ? loadClaudeThreads() : loadCodexThreads()
+  )));
+  if (snapshots.length === 1) {
+    return {
+      ...snapshots[0],
+      provider,
+      providerLabel,
+      activeProviders,
+    };
+  }
+
+  const refreshedAt = new Date().toISOString();
+  const threads = snapshots
+    .flatMap((snapshot) => snapshot.threads || [])
+    .sort((a, b) => {
+      const pinnedDelta = Number(b.pinned) - Number(a.pinned);
+      if (pinnedDelta) return pinnedDelta;
+      return new Date(b.activityAt || 0) - new Date(a.activityAt || 0);
+    });
+  const codexSnapshot = snapshots.find((snapshot) => snapshot.provider === "codex") || null;
+  return {
+    provider,
+    providerLabel,
+    activeProviders,
+    providers: Object.fromEntries(snapshots.map((snapshot) => [snapshot.provider, {
+      provider: snapshot.provider,
+      providerLabel: snapshot.providerLabel,
+      total: snapshot.threads?.length || 0,
+      error: snapshot.error,
+      dataHome: snapshot.dataHome,
+    }])),
+    indexPath: codexSnapshot?.indexPath || null,
+    stateDbPath: codexSnapshot?.stateDbPath || null,
+    goalsDbPath: codexSnapshot?.goalsDbPath || null,
+    logsDbPath: codexSnapshot?.logsDbPath || null,
+    globalStatePath: codexSnapshot?.globalStatePath || null,
+    processManagerPath: codexSnapshot?.processManagerPath || null,
+    sessionsRoot: codexSnapshot?.sessionsRoot || null,
+    codexHome,
+    claudeHome,
+    dataHome,
+    statusWindows,
+    refreshedAt,
+    summary: computeSummary(threads, refreshedAt),
+    usage: codexSnapshot?.usage || await readUsageMetrics(),
+    threads,
+    errors: snapshots.filter((snapshot) => snapshot.error).map((snapshot) => snapshot.error),
+  };
+}
+
 async function getThreadSnapshot(threadId) {
   if (!isThreadId(threadId)) return null;
   const snapshot = await loadThreads();
   const thread = snapshot.threads.find((item) => item.id === threadId) || null;
   return { snapshot, thread };
+}
+
+async function getThreadProvider(threadId) {
+  const found = await getThreadSnapshot(threadId);
+  return found?.thread?.provider || null;
+}
+
+async function filterThreadIdsByProvider(ids, targetProvider) {
+  const snapshot = await loadThreads();
+  const allowed = new Set(
+    snapshot.threads
+      .filter((thread) => ids.has(thread.id) && thread.provider === targetProvider)
+      .map((thread) => thread.id)
+  );
+  return allowed;
 }
 
 function parsePositiveInt(value, fallback, max) {
@@ -1878,7 +1967,13 @@ async function readThreadEventsPayload(threadId, query = new URLSearchParams()) 
 }
 
 async function readTagsPayload() {
-  const tagsByThread = await readThreadTags();
+  const tagMaps = await Promise.all(activeProviders.map((name) => readThreadTags(name === "claude" ? claudeTagsPath : codexTagsPath)));
+  const tagsByThread = {};
+  for (const map of tagMaps) {
+    for (const [threadId, tags] of Object.entries(map)) {
+      tagsByThread[threadId] = cleanTags([...(tagsByThread[threadId] || []), ...tags]);
+    }
+  }
   const counts = {};
   for (const tags of Object.values(tagsByThread)) {
     for (const tag of tags) counts[tag] = (counts[tag] || 0) + 1;
@@ -1891,6 +1986,14 @@ async function readTagsPayload() {
 }
 
 async function readProcessesPayload() {
+  if (!activeProviders.includes("codex")) {
+    return {
+      processManagerPath: null,
+      total: 0,
+      live: 0,
+      threads: {},
+    };
+  }
   const processRowsByThread = await readProcessRows();
   const threads = {};
   for (const [threadId, rows] of processRowsByThread.entries()) {
@@ -1909,6 +2012,7 @@ function readConfigPayload() {
     version: packageJson.version || "0.0.0",
     provider,
     providerLabel,
+    activeProviders,
     codexHome,
     claudeHome,
     dataHome,
@@ -1930,7 +2034,7 @@ function readConfigPayload() {
 }
 
 function readSourcesPayload() {
-  if (isClaude) {
+  if (provider === "claude") {
     return {
       provider,
       providerLabel,
@@ -1947,6 +2051,63 @@ function readSourcesPayload() {
         tags: fsSync.existsSync(tagsPath),
         webhooks: fsSync.existsSync(webhooksPath),
         localState: fsSync.existsSync(localStatePath),
+      },
+    };
+  }
+
+  if (provider === "mixed") {
+    return {
+      provider,
+      providerLabel,
+      activeProviders,
+      codexHome,
+      claudeHome,
+      dataHome,
+      sources: {
+        codex: {
+          provider: "codex",
+          providerLabel: providerLabels.codex,
+          codexHome,
+          candidateIndexPaths,
+          globalStatePath,
+          tagsPath: codexTagsPath,
+          webhooksPath,
+          processManagerPath,
+          sessionsRoot,
+          stateDbPath,
+          goalsDbPath,
+          logsDbPath,
+          exists: {
+            codexHome: fsSync.existsSync(codexHome),
+            index: candidateIndexPaths.some((filePath) => fsSync.existsSync(filePath)),
+            globalState: fsSync.existsSync(globalStatePath),
+            tags: fsSync.existsSync(codexTagsPath),
+            webhooks: fsSync.existsSync(webhooksPath),
+            processManager: fsSync.existsSync(processManagerPath),
+            sessionsRoot: fsSync.existsSync(sessionsRoot),
+            stateDb: fsSync.existsSync(stateDbPath),
+            goalsDb: fsSync.existsSync(goalsDbPath),
+            logsDb: fsSync.existsSync(logsDbPath),
+          },
+        },
+        claude: {
+          provider: "claude",
+          providerLabel: providerLabels.claude,
+          claudeHome,
+          dataHome: claudeHome,
+          claudeProjectsRoot,
+          tagsPath: claudeTagsPath,
+          webhooksPath: path.join(claudeHome, "agentqueue-webhooks.json"),
+          localStatePath,
+          sessionsRoot: claudeProjectsRoot,
+          exists: {
+            claudeHome: fsSync.existsSync(claudeHome),
+            claudeProjectsRoot: fsSync.existsSync(claudeProjectsRoot),
+            tags: fsSync.existsSync(claudeTagsPath),
+            webhooks: fsSync.existsSync(path.join(claudeHome, "agentqueue-webhooks.json")),
+            localState: fsSync.existsSync(localStatePath),
+          },
+        },
       },
     };
   }
@@ -2011,14 +2172,15 @@ async function runDoctor() {
 
   add(nodeMajor >= 18 ? "pass" : "fail", "Node.js", `${process.version}${nodeMajor >= 24 ? " with node:sqlite support" : " without stable node:sqlite support"}`);
   add("pass", "Data source", `${providerLabel} (${provider})`);
-  if (isClaude) {
-    add(fsSync.existsSync(claudeHome) ? "pass" : "fail", "CLAUDE_HOME", claudeHome);
-    add(fsSync.existsSync(claudeProjectsRoot) ? "pass" : "warn", "Claude projects", claudeProjectsRoot);
-  } else {
+  if (activeProviders.includes("codex")) {
     add(DatabaseSync ? "pass" : "warn", "SQLite inventory", DatabaseSync ? "node:sqlite is available" : "Node 24+ recommended for Codex SQLite inventory reads");
     add(fsSync.existsSync(codexHome) ? "pass" : "fail", "CODEX_HOME", codexHome);
     add(candidateIndexPaths.some((filePath) => fsSync.existsSync(filePath)) || fsSync.existsSync(stateDbPath) ? "pass" : "warn", "Thread inventory", "session_index.jsonl or state_5.sqlite");
     add(fsSync.existsSync(sessionsRoot) ? "pass" : "warn", "Sessions directory", sessionsRoot);
+  }
+  if (activeProviders.includes("claude")) {
+    add(fsSync.existsSync(claudeHome) ? "pass" : "fail", "CLAUDE_HOME", claudeHome);
+    add(fsSync.existsSync(claudeProjectsRoot) ? "pass" : "warn", "Claude projects", claudeProjectsRoot);
   }
   add(git.available ? "pass" : "warn", "Git", git.available ? "git command is available" : git.error || "git unavailable");
   add(git.isRepo ? "pass" : "warn", "Install type", git.isRepo ? `git clone on ${git.branch || "detached"} @ ${git.commit}` : "not a git checkout");
@@ -2108,7 +2270,8 @@ async function renderHealthPage() {
     ["Version", packageJson.version || "0.0.0"],
     ["Source", `${providerLabel} (${provider})`],
     ["Node", process.version],
-    [isClaude ? "CLAUDE_HOME" : "CODEX_HOME", dataHome],
+    ["CODEX_HOME", codexHome],
+    ["CLAUDE_HOME", claudeHome],
     ["SQLite", DatabaseSync ? "available" : "unavailable; Node 24+ recommended"],
     ["Git install", git.isRepo ? `${git.repo} ${git.dirty ? "(local changes)" : "(clean)"}` : "not a git checkout"],
     ["Latest release", release.available ? `${release.latestTag}${release.updateAvailable ? " available" : " current"}` : release.reason || "unknown"],
@@ -2549,7 +2712,8 @@ async function handleApiRequest(req, res, url) {
       if (req.method !== "POST") return sendMethodNotAllowed(res, ["POST"]);
       const body = await readRequestJson(req);
       let target = `codex://threads/${threadId}`;
-      if (isClaude) {
+      const targetProvider = await getThreadProvider(threadId);
+      if (targetProvider === "claude") {
         const filePath = (await getClaudeSessionFilesById()).get(threadId);
         target = filePath ? pathToFileURL(filePath).href : "";
       }
@@ -2591,6 +2755,7 @@ async function handleApiRequest(req, res, url) {
       version: packageJson.version || "0.0.0",
       provider,
       providerLabel,
+      activeProviders,
       codexHome,
       claudeHome,
       dataHome,

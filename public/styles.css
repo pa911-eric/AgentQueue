@@ -1355,6 +1355,18 @@ body.modal-open {
   background: #f8fafc;
 }
 
+.badge.provider-codex {
+  color: #334155;
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.badge.provider-claude {
+  color: #92400e;
+  border-color: #fcd34d;
+  background: #fffbeb;
+}
+
 .badge.tag {
   color: #005236;
   border-color: #a7f3d0;

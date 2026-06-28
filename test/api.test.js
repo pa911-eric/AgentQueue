@@ -158,6 +158,21 @@ async function createClaudeFixture() {
   };
 }
 
+async function createMixedFixture() {
+  const codex = await createCodexFixture();
+  const claude = await createClaudeFixture();
+  return {
+    codex,
+    claude,
+    installMetadataPath: codex.installMetadataPath,
+    env: {
+      CODEX_HOME: codex.codexHome,
+      CLAUDE_HOME: claude.claudeHome,
+      AGENTQUEUE_PROVIDER: "",
+    },
+  };
+}
+
 async function startServer(fixture) {
   const child = spawn(process.execPath, ["--no-warnings", "server.js"], {
     cwd: root,
@@ -510,5 +525,62 @@ test("AgentQueue Claude Code provider", async (t) => {
     assert.equal(sources.status, 200);
     assert.equal(sources.json.provider, "claude");
     assert.equal(sources.json.exists.claudeProjectsRoot, true);
+  });
+});
+
+test("AgentQueue mixed provider mode", async (t) => {
+  const fixture = await createMixedFixture();
+  const server = await startServer(fixture);
+  t.after(async () => {
+    await server.stop();
+    await fs.rm(fixture.codex.tempRoot, { recursive: true, force: true });
+    await fs.rm(fixture.claude.tempRoot, { recursive: true, force: true });
+  });
+
+  await t.test("merges Codex and Claude Code threads", async () => {
+    const config = await checkedRequest(server, "/api/config");
+    assert.equal(config.json.provider, "mixed");
+    assert.deepEqual(config.json.activeProviders, ["codex", "claude"]);
+
+    const snapshot = await checkedRequest(server, "/api/threads");
+    assert.equal(snapshot.status, 200);
+    assert.equal(snapshot.json.provider, "mixed");
+    assert.equal(snapshot.json.summary.total, 3);
+    assert.equal(snapshot.json.threads.find((item) => item.id === threadId).provider, "codex");
+    assert.equal(snapshot.json.threads.find((item) => item.id === claudeThreadId).provider, "claude");
+  });
+
+  await t.test("keeps Codex-only usage available", async () => {
+    const usage = await checkedRequest(server, "/api/usage");
+    assert.equal(usage.status, 200);
+    assert.equal(usage.json.available, true);
+    assert.equal(usage.json.limitId, "codex");
+  });
+
+  await t.test("routes writes to each provider sidecar or state store", async () => {
+    const codexTags = await checkedRequest(server, `/api/threads/${threadId}/tags`, {
+      method: "PATCH",
+      body: { tags: ["codex-tag"] },
+    });
+    assert.equal(codexTags.status, 200);
+
+    const claudeTags = await checkedRequest(server, `/api/threads/${claudeThreadId}/tags`, {
+      method: "PATCH",
+      body: { tags: ["claude-tag"] },
+    });
+    assert.equal(claudeTags.status, 200);
+
+    const tags = await checkedRequest(server, "/api/tags");
+    assert.deepEqual(tags.json.threads[threadId], ["codex-tag"]);
+    assert.deepEqual(tags.json.threads[claudeThreadId], ["claude-tag"]);
+
+    const pin = await checkedRequest(server, `/api/threads/${claudeThreadId}/state`, {
+      method: "PATCH",
+      body: { pinned: true },
+    });
+    assert.equal(pin.status, 200);
+
+    const localState = JSON.parse(await fs.readFile(path.join(fixture.claude.claudeHome, "agentqueue-localstate.json"), "utf8"));
+    assert.deepEqual(localState.pinned, [claudeThreadId]);
   });
 });

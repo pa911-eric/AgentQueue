@@ -412,6 +412,8 @@ function threadMatches(thread, query) {
     thread.workspace,
     thread.outputDirectory,
     thread.status,
+    thread.provider,
+    thread.providerLabel,
     thread.lastToolName,
     tags.join(" "),
   ].map(normalize).join(" ");
@@ -593,6 +595,7 @@ function renderCard(thread) {
   else if (thread.logHealth?.warnings24h || stats.warnings) meta.append(makeMeta("Warnings", thread.logHealth.warnings24h + stats.warnings));
 
   const badges = card.querySelector(".badges");
+  if (thread.providerLabel) badges.append(makeBadge(thread.providerLabel, thread.provider === "claude" ? "provider-claude" : "provider-codex"));
   if (thread.goal?.status === "active" || stats.activeGoals) badges.append(makeBadge(stats.activeGoals > 1 ? `${stats.activeGoals} active goals` : "goal active", "process"));
   for (const tag of getThreadTags(thread, false)) badges.append(makeBadge(tag, "tag"));
   const projectLabel = getProjectLabel(thread);
@@ -1260,6 +1263,7 @@ function renderDetailBadges(thread) {
   const stats = childStats(thread);
   const badges = [];
   badges.push(makeBadge(thread.statusLabel, thread.status).outerHTML);
+  if (thread.providerLabel) badges.push(makeBadge(thread.providerLabel, thread.provider === "claude" ? "provider-claude" : "provider-codex").outerHTML);
   if (thread.threadSource === "subagent") badges.push(makeBadge(thread.agentRole ? `subagent ${thread.agentRole}` : "subagent", "strong").outerHTML);
   if (stats.total) badges.push(makeBadge(`${stats.total} subagents`, "strong").outerHTML);
   if (thread.fullAccess) badges.push(makeBadge("full access", "danger").outerHTML);
