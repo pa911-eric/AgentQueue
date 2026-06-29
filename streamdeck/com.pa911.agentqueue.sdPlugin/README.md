@@ -19,3 +19,5 @@ Default localhost probing starts at `http://localhost:4173` and checks ports thr
 If you need a fixed URL, copy `agentqueue-streamdeck.config.example.json` to `agentqueue-streamdeck.config.json` in this plugin folder and set `baseUrl`.
 
 The open actions call AgentQueue's local `POST /api/threads/{threadId}/open` endpoint, which opens the `codex://threads/{threadId}` deep link on this machine.
+
+Count and unread actions open the running AgentQueue dashboard. Open actions also fall back to the dashboard when there is no matching running or complete thread. Stream Deck asks the default browser to open the dashboard URL; focusing an existing tab instead of creating a new one depends on the browser.

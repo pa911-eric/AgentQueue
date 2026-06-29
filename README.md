@@ -176,7 +176,7 @@ Open Running  | Open Complete  | Unread Count
 
 Install it by copying or symlinking the `.sdPlugin` folder into Stream Deck's plugins folder, restarting Stream Deck, and adding the six AgentQueue actions in that order.
 
-Keep AgentQueue running locally. The plugin probes `http://localhost:4173` through `http://localhost:4185`, matching the dashboard's automatic next-port behavior. For a fixed URL, copy `agentqueue-streamdeck.config.example.json` to `agentqueue-streamdeck.config.json` inside the plugin folder and set `baseUrl`.
+Keep AgentQueue running locally. The plugin probes `http://localhost:4173` through `http://localhost:4185`, matching the dashboard's automatic next-port behavior. Count keys open the AgentQueue dashboard, and open-thread keys fall back to the dashboard when there is no matching thread. For a fixed URL, copy `agentqueue-streamdeck.config.example.json` to `agentqueue-streamdeck.config.json` inside the plugin folder and set `baseUrl`.
 
 ## Configuration
 

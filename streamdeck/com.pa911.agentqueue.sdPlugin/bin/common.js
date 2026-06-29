@@ -58,6 +58,28 @@ function pickMostRecentThread(snapshot, status) {
     .sort((left, right) => statusTime(right) - statusTime(left))[0] || null;
 }
 
+function normalizeBaseUrl(baseUrl) {
+  return String(baseUrl || "http://localhost:4173").replace(/\/+$/, "");
+}
+
+function resolveActionOpenTarget(action, snapshot, baseUrl) {
+  const meta = ACTION_META[action];
+  const dashboardUrl = normalizeBaseUrl(baseUrl);
+  if (!meta) return { kind: "dashboard", url: dashboardUrl };
+
+  if (meta.kind !== "open") return { kind: "dashboard", url: dashboardUrl };
+
+  const thread = pickMostRecentThread(snapshot, meta.status);
+  if (!thread?.id) return { kind: "dashboard", url: dashboardUrl };
+
+  return {
+    kind: "thread",
+    thread,
+    endpoint: `${dashboardUrl}/api/threads/${thread.id}/open`,
+    fallbackUrl: dashboardUrl,
+  };
+}
+
 function compactTitle(value, maxLength = 34) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (!text) return "None";
@@ -136,6 +158,7 @@ module.exports = {
   compactTitle,
   pickMostRecentThread,
   renderKeySvg,
+  resolveActionOpenTarget,
   summarizeSnapshot,
   svgDataUrl,
 };

@@ -5,6 +5,7 @@ const {
   buildKeyState,
   pickMostRecentThread,
   renderKeySvg,
+  resolveActionOpenTarget,
   summarizeSnapshot,
 } = require("../streamdeck/com.pa911.agentqueue.sdPlugin/bin/common");
 
@@ -48,4 +49,17 @@ test("Stream Deck key renderer creates offline and count states", () => {
   const offline = buildKeyState(ACTIONS.unreadCount, snapshot, { connected: false, error: "offline" });
   assert.equal(offline.value, "OFF");
   assert.match(renderKeySvg(offline), /offline/);
+});
+
+test("Stream Deck actions resolve to a thread or dashboard target", () => {
+  const baseUrl = "http://localhost:4173/";
+  const running = resolveActionOpenTarget(ACTIONS.openRunning, snapshot, baseUrl);
+  assert.equal(running.kind, "thread");
+  assert.equal(running.endpoint, "http://localhost:4173/api/threads/newer-running/open");
+
+  const count = resolveActionOpenTarget(ACTIONS.runningCount, snapshot, baseUrl);
+  assert.deepEqual(count, { kind: "dashboard", url: "http://localhost:4173" });
+
+  const missingComplete = resolveActionOpenTarget(ACTIONS.openComplete, { threads: [], summary: { counts: {}, unread: 0 } }, baseUrl);
+  assert.deepEqual(missingComplete, { kind: "dashboard", url: "http://localhost:4173" });
 });

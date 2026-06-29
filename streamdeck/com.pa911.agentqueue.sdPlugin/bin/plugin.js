@@ -5,10 +5,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {
   ACTIONS,
-  ACTION_META,
   buildKeyState,
-  pickMostRecentThread,
   renderKeySvg,
+  resolveActionOpenTarget,
   svgDataUrl,
 } = require("./common");
 const { StreamDeckWebSocket } = require("./streamdeck-ws");
@@ -117,13 +116,15 @@ async function refreshSnapshot() {
 }
 
 async function openMostRecent(action) {
-  const meta = ACTION_META[action];
-  if (!meta || meta.kind !== "open") return;
   await refreshSnapshot();
-  const thread = pickMostRecentThread(latestSnapshot, meta.status);
-  if (!thread?.id || !activeBaseUrl) return;
+  const target = resolveActionOpenTarget(action, latestSnapshot, activeBaseUrl || loadConfig().baseUrl);
 
-  await fetch(`${activeBaseUrl}/api/threads/${thread.id}/open`, {
+  if (target.kind !== "thread") {
+    streamDeck.send({ event: "openUrl", payload: { url: target.url } });
+    return;
+  }
+
+  await fetch(target.endpoint, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({}),
