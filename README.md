@@ -46,19 +46,17 @@ Auto mode reads both Codex and Claude Code when both have local state. Force a s
 
 Download and run the Windows installer:
 
-```text
-AgentQueue-Setup-0.4.4.exe
-```
+[AgentQueue-Setup-0.4.4.exe](https://github.com/pa911-eric/AgentQueue/releases/latest/download/AgentQueue-Setup-0.4.4.exe)
 
 The desktop app runs the same local AgentQueue dashboard and API inside an installed Windows app. It starts the local server on `127.0.0.1`, opens the dashboard in an AgentQueue window, and keeps a tray icon available for opening the app, opening diagnostics, copying the local URL, toggling start at login, and quitting.
 
 The desktop installer is separate from `build-agentqueue-installer-exe.ps1`, which is the legacy source installer wrapper that downloads the repo and opens the browser-based launcher.
 
-## Install Now
+## Source install
 
-### One-click installer (recommended)
+Use the source install flow if you want to run from a cloned checkout or use the portable scripts instead of the desktop app.
 
-Use this one-command install flow for each platform:
+One-command source install:
 
 **Windows**
 ```powershell
